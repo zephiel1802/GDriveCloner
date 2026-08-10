@@ -30,23 +30,16 @@ fi
 PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
 echo -e "${GREEN}✅  Python $PYTHON_VERSION${NC}"
 
-# ── 2. Tìm pip ──────────────────────────────────────────────
-echo -e "${YELLOW}[2/4] Kiểm tra pip...${NC}"
-if command -v pip3 &>/dev/null; then
-    PIP=pip3
-elif python3 -m pip --version &>/dev/null 2>&1; then
-    PIP="python3 -m pip"
-else
-    echo -e "${RED}❌  Không tìm thấy pip. Đang cài...${NC}"
-    python3 -m ensurepip --upgrade
-    PIP="python3 -m pip"
-fi
+# ── 2. Nâng cấp pip & cài dependencies ─────────────────────
+echo -e "${YELLOW}[2/4] Chuẩn bị pip...${NC}"
+# Luôn dùng python3 -m pip để tránh vấn đề PATH
+PIP="python3 -m pip"
+python3 -m pip install --upgrade pip --quiet --no-warn-script-location 2>/dev/null
 echo -e "${GREEN}✅  pip OK${NC}"
 
 # ── 3. Cài dependencies ─────────────────────────────────────
 echo -e "${YELLOW}[3/4] Cài đặt dependencies...${NC}"
-$PIP install --upgrade pip --quiet
-$PIP install -r "$SCRIPT_DIR/requirements.txt" --quiet
+$PIP install -r "$SCRIPT_DIR/requirements.txt" --quiet --no-warn-script-location
 
 echo -e "${GREEN}✅  Tất cả dependencies đã sẵn sàng${NC}"
 
