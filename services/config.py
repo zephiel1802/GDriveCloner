@@ -1,10 +1,29 @@
 """
 Config management — saves/loads user preferences locally.
+
+When running as a PyInstaller bundle, the executable is read-only.
+All user data (config, tokens) is stored in the user's data directory:
+  - macOS/Linux: ~/.gdrivecloner/
+  - Windows:     %APPDATA%\\GDriveCloner\\
 """
 import os
 import json
+import sys
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.json")
+
+def _get_data_dir() -> str:
+    """Return platform-appropriate user data directory for GDriveCloner."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+        data_dir = os.path.join(base, "GDriveCloner")
+    else:
+        data_dir = os.path.join(os.path.expanduser("~"), ".gdrivecloner")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+DATA_DIR = _get_data_dir()
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 
 _DEFAULTS = {
     "source_folder_id": "root",

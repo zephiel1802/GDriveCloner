@@ -1,0 +1,132 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build executable
+        run: pyinstaller GDriveCloner.spec
+
+      - name: Package for release
+        run: |
+          chmod +x dist/GDriveCloner
+          mkdir -p release/GDriveCloner-macOS
+          cp dist/GDriveCloner release/GDriveCloner-macOS/
+          cp README.md release/GDriveCloner-macOS/
+          printf '=== GDriveCloner Setup ===\n\n1. Place credentials.json into:\n   ~/.gdrivecloner/credentials.json\n\n2. Run ./GDriveCloner\n   (First run: right-click > Open to bypass Gatekeeper)\n\n3. Sign in to Google when the browser opens.\n' > release/GDriveCloner-macOS/SETUP.txt
+          cd release && zip -r GDriveCloner-macOS.zip GDriveCloner-macOS/
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GDriveCloner-macOS
+          path: release/GDriveCloner-macOS.zip
+          retention-days: 1
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build executable
+        run: pyinstaller GDriveCloner.spec
+
+      - name: Package for release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "release\GDriveCloner-Windows" -Force | Out-Null
+          Copy-Item "dist\GDriveCloner.exe" "release\GDriveCloner-Windows\"
+          Copy-Item "README.md" "release\GDriveCloner-Windows\"
+          $setup = "=== GDriveCloner Setup ===`n`n1. Place credentials.json into:`n   %APPDATA%\GDriveCloner\credentials.json`n`n2. Double-click GDriveCloner.exe`n`n3. Sign in to Google when the browser opens.`n"
+          Set-Content "release\GDriveCloner-Windows\SETUP.txt" -Value $setup
+          Compress-Archive -Path "release\GDriveCloner-Windows" -DestinationPath "release\GDriveCloner-Windows.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GDriveCloner-Windows
+          path: release\GDriveCloner-Windows.zip
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: GDriveCloner-macOS
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: GDriveCloner-Windows
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "GDriveCloner ${{ github.ref_name }}"
+          body: |
+            ## GDriveCloner ${{ github.ref_name }}
+
+            ### Download
+
+            | Platform | File |
+            |----------|------|
+            | macOS | `GDriveCloner-macOS.zip` |
+            | Windows | `GDriveCloner-Windows.zip` |
+
+            ### Quick Start
+
+            1. Download and extract the zip for your platform.
+            2. Place `credentials.json` (from Google Cloud Console) into:
+               - **macOS**: `~/.gdrivecloner/credentials.json`
+               - **Windows**: `%APPDATA%\GDriveCloner\credentials.json`
+            3. Run the executable — browser opens at `http://localhost:5001`.
+            4. **macOS first run**: right-click → *Open* to bypass Gatekeeper.
+
+            ### Changelog
+            _See commit history for full details._
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/GDriveCloner-macOS.zip
+            artifacts/GDriveCloner-Windows.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
