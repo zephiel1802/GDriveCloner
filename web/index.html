@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drive Share Manager</title>
+    <meta name="description" content="Tạo và quản lý link share tạm thời Google Drive">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app-layout">
+
+    <!-- ─── Sidebar ────────────────────────────────────────────── -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <span class="logo-icon">🗂️</span>
+            <div class="logo-text">
+                <span class="logo-title">Share</span>
+                <span class="logo-subtitle">Manager</span>
+            </div>
+        </div>
+
+        <div class="sidebar-divider"></div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-tab="create" id="nav-create">
+                <span class="nav-icon">✨</span>
+                <span class="nav-label">Tạo Share</span>
+            </button>
+            <button class="nav-item" data-tab="list" id="nav-list">
+                <span class="nav-icon">📋</span>
+                <span class="nav-label">Danh sách</span>
+            </button>
+            <button class="nav-item" data-tab="clone" id="nav-clone">
+                <span class="nav-icon">📥</span>
+                <span class="nav-label">Clone</span>
+            </button>
+            <button class="nav-item" data-tab="settings" id="nav-settings">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-label">Cài đặt</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+
+        <div class="auth-badge">
+            <span class="status-dot" id="status-dot"></span>
+            <span class="status-text" id="status-text">Đang kiểm tra...</span>
+        </div>
+    </aside>
+
+    <!-- ─── Main Content ───────────────────────────────────────── -->
+    <main class="main-content">
+
+        <!-- Create Tab -->
+        <div class="tab-panel" data-tab="create" id="panel-create">
+            <div class="panel-scroll">
+                <div class="panel-header">
+                    <h1 class="panel-title">✨ Tạo Link Share Tạm</h1>
+                    <p class="panel-subtitle">Copy file từ thư mục nguồn, tạo link share và tự động xóa sau thời hạn.</p>
+                </div>
+
+                <!-- Source folder -->
+                <div class="section-label">📂 Thư mục nguồn</div>
+                <div class="card">
+                    <div class="card-row">
+                        <span class="folder-display" id="src-folder-name">My Drive</span>
+                        <button class="btn btn-primary btn-sm" id="browse-btn" onclick="App.openFolderBrowser()">Thay đổi</button>
+                    </div>
+                </div>
+
+                <!-- Folder name -->
+                <div class="section-label">📝 Tên thư mục tạm</div>
+                <div class="card">
+                    <input type="text" class="text-input" id="folder-name" placeholder="Nhập tên thư mục...">
+                </div>
+
+                <!-- Duration -->
+                <div class="section-label">⏱ Thời hạn tự xóa</div>
+                <div class="card">
+                    <div class="dur-buttons">
+                        <button class="dur-btn" data-hours="1"  onclick="App.selectDuration(1)">1 giờ</button>
+                        <button class="dur-btn" data-hours="6"  onclick="App.selectDuration(6)">6 giờ</button>
+                        <button class="dur-btn" data-hours="12" onclick="App.selectDuration(12)">12 giờ</button>
+                        <button class="dur-btn active" data-hours="24" onclick="App.selectDuration(24)">24 giờ</button>
+                        <button class="dur-btn" data-hours="48" onclick="App.selectDuration(48)">48 giờ</button>
+                    </div>
+                    <div class="custom-dur-row">
+                        <span class="label-text">Hoặc nhập số giờ:</span>
+                        <input type="number" class="num-input" id="custom-hours" placeholder="72" min="1">
+                        <span class="label-text">giờ</span>
+                    </div>
+                </div>
+
+                <!-- Create button -->
+                <button class="btn btn-primary btn-block btn-large" id="create-btn" onclick="App.createShare()">
+                    🚀 Tạo &amp; Share ngay
+                </button>
+
+                <!-- Progress area (hidden initially) -->
+                <div class="card progress-card" id="progress-area" style="display:none">
+                    <!-- Steps indicator -->
+                    <div class="steps">
+                        <div class="step-item" data-step="0">
+                            <div class="step-dot"></div>
+                            <span class="step-label">Tạo thư mục</span>
+                        </div>
+                        <div class="step-connector"></div>
+                        <div class="step-item" data-step="1">
+                            <div class="step-dot"></div>
+                            <span class="step-label">Bật share</span>
+                        </div>
+                        <div class="step-connector"></div>
+                        <div class="step-item" data-step="2">
+                            <div class="step-dot"></div>
+                            <span class="step-label">Copy files</span>
+                        </div>
+                        <div class="step-connector"></div>
+                        <div class="step-item" data-step="3">
+                            <div class="step-dot"></div>
+                            <span class="step-label">Ghi lịch xóa</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="progress-bar-fill"></div>
+                    </div>
+
+                    <p class="progress-msg" id="progress-msg"></p>
+
+                    <!-- Result (shown on success) -->
+                    <div class="result-area" id="result-area" style="display:none">
+                        <input type="text" class="text-input" id="share-link" readonly>
+                        <button class="btn btn-success btn-block" id="copy-btn" onclick="App.copyLink()">
+                            📋 Copy Link
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Clone Tab -->
+        <div class="tab-panel hidden" data-tab="clone" id="panel-clone">
+            <div class="panel-scroll">
+                <div class="panel-header">
+                    <h1 class="panel-title">📥 Clone từ Shared Link</h1>
+                    <p class="panel-subtitle">Copy toàn bộ file & thư mục từ link Drive được chia sẻ về Drive của bạn. Tự động bỏ qua file đã tồn tại.</p>
+                </div>
+
+                <!-- Source link -->
+                <div class="section-label">🔗 Link hoặc ID thư mục nguồn</div>
+                <div class="card">
+                    <input type="text" class="text-input" id="clone-source-input"
+                           placeholder="https://drive.google.com/drive/folders/... hoặc ID">
+                    <p class="hint-text" style="margin-top:8px">Nhận link share từ người khác, dán vào đây.</p>
+                </div>
+
+                <!-- Destination folder -->
+                <div class="section-label">📂 Thư mục đích (trong Drive của bạn)</div>
+                <div class="card">
+                    <!-- Row 1: current selection + browse -->
+                    <div class="card-row">
+                        <span class="folder-display" id="clone-dest-name">My Drive (root)</span>
+                        <button class="btn btn-primary btn-sm" id="clone-browse-btn"
+                                onclick="App.openCloneFolderBrowser()">Duyệt</button>
+                    </div>
+
+                    <!-- Divider -->
+                    <div class="clone-dest-divider">
+                        <span>hoặc</span>
+                    </div>
+
+                    <!-- Row 2: create new folder inline -->
+                    <div class="clone-new-folder-row">
+                        <input type="text" class="text-input clone-new-folder-input"
+                               id="clone-new-folder-name"
+                               placeholder="Tên thư mục mới..."
+                               onkeydown="if(event.key==='Enter') App.createCloneDest()">
+                        <button class="btn btn-success btn-sm" id="clone-create-dest-btn"
+                                onclick="App.createCloneDest()">
+                            ＋ Tạo &amp; chọn
+                        </button>
+                    </div>
+                    <p class="hint-text" id="clone-create-dest-hint" style="margin-top:6px;display:none"></p>
+                </div>
+
+                <!-- Start button -->
+                <button class="btn btn-primary btn-block btn-large" id="clone-btn"
+                        onclick="App.startClone()">
+                    🚀 Bắt đầu Clone
+                </button>
+
+                <!-- Log viewer (hidden until started) -->
+                <div id="clone-log-area" style="display:none">
+                    <div class="section-label" style="margin-top:16px">📋 Log thời gian thực</div>
+                    <div class="clone-log-box" id="clone-log-box"></div>
+
+                    <!-- Stats (hidden until done) -->
+                    <div class="clone-stats-card" id="clone-stats-card" style="display:none">
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">📄</span>
+                            <span class="clone-stat-value" id="stat-copied">0</span>
+                            <span class="clone-stat-label">File đã copy</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">⏩</span>
+                            <span class="clone-stat-value" id="stat-skipped">0</span>
+                            <span class="clone-stat-label">Đã bỏ qua</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">📁</span>
+                            <span class="clone-stat-value" id="stat-folders">0</span>
+                            <span class="clone-stat-label">Thư mục tạo mới</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">❌</span>
+                            <span class="clone-stat-value" id="stat-errors">0</span>
+                            <span class="clone-stat-label">Lỗi</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- List Tab -->
+        <div class="tab-panel hidden" data-tab="list" id="panel-list">
+            <div class="panel-scroll">
+                <div class="list-header">
+                    <h1 class="panel-title">📋 Danh sách đang chia sẻ</h1>
+                    <button class="btn btn-ghost btn-sm" id="refresh-btn" onclick="App.loadQueue()">🔄 Làm mới</button>
+                </div>
+                <p class="list-status" id="list-status"></p>
+                <div class="queue-list" id="queue-list"></div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-panel hidden" data-tab="settings" id="panel-settings">
+            <div class="panel-scroll">
+                <div class="panel-header">
+                    <h1 class="panel-title">⚙️ Cài đặt</h1>
+                </div>
+
+                <!-- Google Account -->
+                <div class="section-label">🔐 Tài khoản Google</div>
+                <div class="card">
+                    <p class="auth-status-text" id="auth-status">⏳ Đang kiểm tra...</p>
+                    <p class="user-info" id="user-display"></p>
+                    <div class="btn-row">
+                        <button class="btn btn-primary" id="login-btn" onclick="App.login()">🔑 Đăng nhập Google</button>
+                        <button class="btn btn-danger-outline" id="logout-btn" onclick="App.logout()" disabled>Đăng xuất</button>
+                    </div>
+                </div>
+
+                <!-- Credentials file -->
+                <div class="section-label">📄 File credentials.json</div>
+                <div class="card">
+                    <p class="creds-status" id="creds-status">Đang kiểm tra...</p>
+                    <p class="hint-text">Tải từ Google Cloud Console → APIs &amp; Services → Credentials → OAuth 2.0 Client IDs</p>
+                </div>
+
+                <!-- Preferences -->
+                <div class="section-label">⚙️ Tuỳ chọn mặc định</div>
+                <div class="card">
+                    <div class="pref-row">
+                        <label class="pref-label">Thời hạn mặc định (giờ):</label>
+                        <input type="number" class="num-input" id="default-duration" value="24" min="1">
+                    </div>
+                    <div class="pref-row">
+                        <label class="pref-label">Tiền tố tên thư mục:</label>
+                        <input type="text" class="text-input pref-input" id="folder-prefix" placeholder="Tài liệu Share Tạm - ">
+                    </div>
+                    <button class="btn btn-primary" onclick="App.saveSettings()">💾 Lưu cài đặt</button>
+                    <p class="save-msg" id="save-msg"></p>
+                </div>
+
+                <!-- Apps Script info -->
+                <div class="section-label">🤖 Script tự động xóa (Apps Script)</div>
+                <div class="card">
+                    <div class="instructions">
+                        <p>Để thư mục tự xóa kể cả khi app đóng:</p>
+                        <ol>
+                            <li>Mở <a href="https://script.google.com" target="_blank" class="link">script.google.com</a> → Tạo project mới</li>
+                            <li>Copy nội dung file <code>AutoDelete.gs</code> vào editor</li>
+                            <li>Bấm Run một lần để cấp quyền</li>
+                            <li>Vào Triggers (⏱) → Add Trigger:<br>
+                                &nbsp;&nbsp;• Function: <code>autoDeleteExpiredFolders</code><br>
+                                &nbsp;&nbsp;• Event: Time-driven → Hour timer → Every hour</li>
+                            <li>Deploy xong là app tự xóa mỗi giờ!</li>
+                        </ol>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<!-- ─── Folder Browser Modal ──────────────────────────────────── -->
+<div class="modal-backdrop" id="folder-modal" style="display:none"
+     onclick="App.closeFolderBrowserOutside(event)">
+    <div class="modal">
+        <div class="modal-header">
+            <h2 class="modal-title">📂 Chọn thư mục nguồn</h2>
+            <button class="modal-close" onclick="App.closeFolderBrowser()">✕</button>
+        </div>
+        <div class="modal-breadcrumb" id="folder-breadcrumb"></div>
+        <div class="folder-list" id="folder-list"></div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="App.closeFolderBrowser()">Hủy</button>
+            <button class="btn btn-primary" onclick="App.selectCurrentFolder()">✓ Chọn thư mục này</button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Toast Container ───────────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
