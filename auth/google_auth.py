@@ -1,8 +1,14 @@
 """
 Google OAuth2 Authentication Module
 Handles the OAuth flow, token storage and refresh.
+
+When bundled with PyInstaller, token.json is stored in the user data dir
+(~/.gdrivecloner/ on macOS/Linux, %APPDATA%\\GDriveCloner\\ on Windows).
+credentials.json is looked up in the user data dir first, then next to the
+executable (for users who manually place it there), then the source dir.
 """
 import os
+import sys
 from typing import Optional
 import json
 from google.oauth2.credentials import Credentials
@@ -13,14 +19,50 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "token.json")
-CREDS_FILE = os.path.join(os.path.dirname(__file__), "..", "credentials.json")
+
+def _data_dir() -> str:
+    """Same logic as services/config._get_data_dir — duplicated to avoid circular import."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+        d = os.path.join(base, "GDriveCloner")
+    else:
+        d = os.path.join(os.path.expanduser("~"), ".gdrivecloner")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _exe_dir() -> str:
+    """Directory of the running executable (works for both script & PyInstaller)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__ + "/.." ))
+
+
+# token.json always lives in the user data dir (writable)
+TOKEN_FILE = os.path.join(_data_dir(), "token.json")
+
+# credentials.json: user data dir > exe dir > source dir
+def _find_creds() -> str:
+    candidates = [
+        os.path.join(_data_dir(), "credentials.json"),
+        os.path.join(_exe_dir(), "credentials.json"),
+        os.path.join(os.path.dirname(__file__), "..", "credentials.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(os.path.abspath(path)):
+            return os.path.abspath(path)
+    # Return primary location (data dir) even if it doesn't exist yet
+    return os.path.join(_data_dir(), "credentials.json")
+
+
+CREDS_FILE = _find_creds()
 
 
 def get_credentials() -> Optional[Credentials]:
     """Load existing credentials or run OAuth flow if needed."""
-    token_path = os.path.abspath(TOKEN_FILE)
-    creds_path = os.path.abspath(CREDS_FILE)
+    # Re-resolve paths at call time (in case data dir was created after import)
+    token_path = TOKEN_FILE
+    creds_path = _find_creds()
     creds = None
 
     if os.path.exists(token_path):
@@ -125,7 +167,7 @@ def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
 
 def is_authenticated() -> bool:
     """Check if valid credentials exist without triggering a new flow."""
-    token_path = os.path.abspath(TOKEN_FILE)
+    token_path = TOKEN_FILE
     if not os.path.exists(token_path):
         return False
     try:
@@ -144,7 +186,7 @@ def is_authenticated() -> bool:
 
 def revoke_credentials():
     """Remove saved token to force re-authentication."""
-    token_path = os.path.abspath(TOKEN_FILE)
+    token_path = TOKEN_FILE
     if os.path.exists(token_path):
         os.remove(token_path)
 

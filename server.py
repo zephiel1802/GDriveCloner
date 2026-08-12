@@ -12,6 +12,23 @@ import re as _re
 import uuid as _uuid
 from typing import Optional
 
+
+def resource_path(relative_path: str) -> str:
+    """
+    Get the absolute path to a bundled resource.
+    Works for:
+      - Normal Python execution (returns path relative to this file's parent)
+      - PyInstaller onefile bundle (uses sys._MEIPASS temp extraction dir)
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running inside PyInstaller bundle
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        # Running as normal Python script
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_path)
+
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, jsonify, request, send_from_directory, Response
@@ -93,7 +110,7 @@ def _startup_init():
 threading.Thread(target=_startup_init, daemon=True).start()
 
 # ─── Static Files ─────────────────────────────────────────────────────────────
-WEB_DIR = os.path.join(os.path.dirname(__file__), 'web')
+WEB_DIR = resource_path('web')
 
 
 @app.route('/')
