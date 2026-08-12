@@ -261,7 +261,16 @@
                 <div class="section-label">📄 File credentials.json</div>
                 <div class="card">
                     <p class="creds-status" id="creds-status">Đang kiểm tra...</p>
-                    <p class="hint-text">Tải từ Google Cloud Console → APIs &amp; Services → Credentials → OAuth 2.0 Client IDs</p>
+                    <p class="hint-text">Tải từ <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="link">Google Cloud Console</a> → APIs &amp; Services → Credentials → OAuth 2.0 Client IDs</p>
+                    <div class="creds-upload-row">
+                        <input type="file" id="creds-file-input" accept=".json,application/json"
+                               style="display:none" onchange="App.uploadCredentials(this)">
+                        <button class="btn btn-outline btn-sm" id="creds-browse-btn"
+                                onclick="document.getElementById('creds-file-input').click()">
+                            📂 Chọn file credentials.json
+                        </button>
+                        <span class="creds-upload-hint" id="creds-upload-hint"></span>
+                    </div>
                 </div>
 
                 <!-- Preferences -->
@@ -321,6 +330,33 @@
 
 <!-- ─── Toast Container ───────────────────────────────────────── -->
 <div class="toast-container" id="toast-container"></div>
+
+<!-- ─── No Credentials Alert Modal ──────────────────────────────── -->
+<div class="modal-backdrop" id="no-creds-modal" style="display:none">
+    <div class="modal no-creds-modal-box">
+        <div class="no-creds-icon">🔑</div>
+        <h2 class="no-creds-title">Thiếu file credentials.json</h2>
+        <p class="no-creds-desc">
+            Để sử dụng app, bạn cần cung cấp file <strong>credentials.json</strong>
+            từ Google Cloud Console.
+        </p>
+        <ol class="no-creds-steps">
+            <li>Truy cập <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="link">Google Cloud Console</a></li>
+            <li>Vào <strong>APIs &amp; Services → Credentials</strong></li>
+            <li>Tạo hoặc tải <strong>OAuth 2.0 Client ID</strong> (Desktop app)</li>
+            <li>Click nút bên dưới để chọn file vừa tải</li>
+        </ol>
+        <div class="no-creds-actions">
+            <button class="btn btn-primary" id="no-creds-browse-btn"
+                    onclick="App.openCredsFromModal()">
+                📂 Chọn file credentials.json
+            </button>
+            <button class="btn btn-ghost" onclick="App.dismissCredsModal()">
+                Bỏ qua
+            </button>
+        </div>
+    </div>
+</div>
 
 <script src="/app.js"></script>
 </body>

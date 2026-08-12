@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import sys
+import shutil
 import queue as q_module
 import re as _re
 import uuid as _uuid
@@ -146,6 +147,35 @@ def api_userinfo():
 def api_creds_status():
     creds_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'credentials.json'))
     return jsonify({'exists': os.path.exists(creds_path), 'path': creds_path})
+
+
+@app.route('/api/upload-credentials', methods=['POST'])
+def api_upload_credentials():
+    """Accept a credentials.json file upload and save it to the app directory."""
+    if 'file' not in request.files:
+        return jsonify({'ok': False, 'error': 'No file uploaded'}), 400
+
+    f = request.files['file']
+    if not f or f.filename == '':
+        return jsonify({'ok': False, 'error': 'No file selected'}), 400
+
+    # Basic validation: must be valid JSON with expected keys
+    try:
+        content = f.read()
+        data = json.loads(content)
+        # Must contain 'installed' or 'web' top-level key (OAuth2 client secret format)
+        if 'installed' not in data and 'web' not in data:
+            return jsonify({'ok': False, 'error': 'File không hợp lệ. Cần file OAuth 2.0 Client ID từ Google Cloud Console.'}), 400
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return jsonify({'ok': False, 'error': 'File không phải JSON hợp lệ.'}), 400
+
+    dest_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'credentials.json'))
+    try:
+        with open(dest_path, 'wb') as out:
+            out.write(content)
+        return jsonify({'ok': True, 'path': dest_path})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/auth/login', methods=['POST'])
