@@ -22,6 +22,8 @@ const App = {
         this._bindNav();
         await Promise.all([this._loadConfig(), this._checkStatus()]);
         this._initCreateTab();
+        // Check credentials on first load — show alert if missing
+        await this._checkCredsOnStartup();
     },
 
     _initCreateTab() {
@@ -198,13 +200,84 @@ const App = {
             const res  = await fetch('/api/creds-status');
             const data = await res.json();
             const el   = document.getElementById('creds-status');
+            const btn  = document.getElementById('creds-browse-btn');
             if (!el) return;
             if (data.exists) {
-                el.innerHTML = `<span style="color:var(--success)">✅ Tìm thấy: ${this._esc(data.path)}</span>`;
+                el.innerHTML = '<span style="color:var(--success)">✅ Đã có file credentials.json</span>';
+                if (btn) btn.textContent = '🔄 Thay thế file';
             } else {
                 el.innerHTML = '<span style="color:var(--error)">❌ Chưa có file credentials.json</span>';
+                if (btn) btn.textContent = '📂 Chọn file credentials.json';
             }
         } catch (_) {}
+    },
+
+    async _checkCredsOnStartup() {
+        try {
+            const res  = await fetch('/api/creds-status');
+            const data = await res.json();
+            if (!data.exists) {
+                this._showCredsModal();
+            }
+        } catch (_) {}
+    },
+
+    _showCredsModal() {
+        const modal = document.getElementById('no-creds-modal');
+        if (modal) modal.style.display = 'flex';
+    },
+
+    dismissCredsModal() {
+        const modal = document.getElementById('no-creds-modal');
+        if (modal) modal.style.display = 'none';
+    },
+
+    openCredsFromModal() {
+        // Close modal, switch to settings tab, then trigger file picker
+        this.dismissCredsModal();
+        this.switchTab('settings');
+        // Small delay to let tab render
+        setTimeout(() => {
+            const input = document.getElementById('creds-file-input');
+            if (input) input.click();
+        }, 150);
+    },
+
+    async uploadCredentials(inputEl) {
+        const file = inputEl.files[0];
+        if (!file) return;
+
+        const hintEl = document.getElementById('creds-upload-hint');
+        const btn    = document.getElementById('creds-browse-btn');
+
+        if (hintEl) { hintEl.textContent = '⏳ Đang tải lên...'; hintEl.style.color = 'var(--subtext)'; }
+        if (btn)    btn.disabled = true;
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const res  = await fetch('/api/upload-credentials', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.ok) {
+                if (hintEl) { hintEl.textContent = '✅ Đã lưu thành công!'; hintEl.style.color = 'var(--success)'; }
+                this.showToast('✅ Credentials đã được cập nhật!', 'success');
+                await this._checkCredsFile();
+                // Also dismiss the no-creds modal if open
+                this.dismissCredsModal();
+            } else {
+                if (hintEl) { hintEl.textContent = '❌ ' + (data.error || 'Lỗi không xác định'); hintEl.style.color = 'var(--error)'; }
+                this.showToast('❌ ' + (data.error || 'Upload thất bại'), 'error');
+            }
+        } catch (e) {
+            if (hintEl) { hintEl.textContent = '❌ ' + e.message; hintEl.style.color = 'var(--error)'; }
+            this.showToast('❌ ' + e.message, 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+            // Reset input so same file can be re-selected
+            inputEl.value = '';
+        }
     },
 
     _defaultFolderName() {
