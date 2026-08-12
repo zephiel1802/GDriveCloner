@@ -2,6 +2,7 @@
 Google Drive Service — wraps all Drive API calls.
 """
 import datetime
+from typing import Optional
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
@@ -158,7 +159,7 @@ class DriveService:
 
     QUEUE_FILENAME = "_share_manager_queue.json"
 
-    def _find_queue_file(self) -> str | None:
+    def _find_queue_file(self) -> Optional[str]:
         """Find the queue JSON file in root, return its ID or None."""
         query = (
             f"name = '{self.QUEUE_FILENAME}' "
@@ -222,3 +223,178 @@ class DriveService:
         queue = self.read_queue()
         queue = [e for e in queue if e.get("folder_id") != folder_id]
         self.write_queue(queue)
+
+    # ──────────────────────────────────────────────
+    # Clone (copy shared → own Drive) with resume
+    # ──────────────────────────────────────────────
+
+    # Quota-error status codes from the Drive API
+    _QUOTA_STATUS_CODES = {429, 403}
+    # Max seconds to wait during exponential backoff
+    _MAX_BACKOFF = 300
+
+    def get_existing_items(self, folder_id: str) -> dict:
+        """
+        Return a dict keyed by (name, is_folder) → file_id for all
+        non-trashed children of folder_id.  Used for resume/skip logic.
+        """
+        items: dict = {}
+        page_token = None
+        while True:
+            query = f"'{folder_id}' in parents and trashed=false"
+            resp = self.service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType)",
+                pageSize=1000,
+                pageToken=page_token,
+            ).execute()
+            for f in resp.get("files", []):
+                is_folder = (f["mimeType"] == "application/vnd.google-apps.folder")
+                items[(f["name"], is_folder)] = f["id"]
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return items
+
+    def _copy_with_backoff(
+        self,
+        file_id: str,
+        body: dict,
+        log_callback=None,
+        max_retries: int = 6,
+    ) -> dict:
+        """
+        Copy a file with exponential backoff on quota / rate-limit errors.
+        Sends { type: 'quota_wait', seconds: N } events via log_callback
+        so the frontend can show a live countdown.
+        Raises the last exception if all retries are exhausted.
+        """
+        import time as _time
+
+        try:
+            from googleapiclient.errors import HttpError
+        except ImportError:
+            HttpError = Exception  # fallback
+
+        delay = 5  # initial wait in seconds
+        for attempt in range(max_retries + 1):
+            try:
+                return self.service.files().copy(
+                    fileId=file_id, body=body
+                ).execute()
+            except HttpError as exc:
+                status = getattr(exc, 'resp', None)
+                status_code = int(status.status) if status else 0
+                is_quota = status_code in self._QUOTA_STATUS_CODES
+
+                if not is_quota or attempt == max_retries:
+                    raise
+
+                wait = min(delay * (2 ** attempt), self._MAX_BACKOFF)
+                if log_callback:
+                    log_callback({
+                        'type': 'quota_wait',
+                        'seconds': wait,
+                        'attempt': attempt + 1,
+                        'msg': f'  ⏳ Quota exceeded — chờ {wait}s rồi retry (lần {attempt + 1}/{max_retries})...',
+                    })
+                # tick down every second so frontend can animate countdown
+                for remaining in range(wait, 0, -1):
+                    _time.sleep(1)
+                    if log_callback:
+                        log_callback({'type': 'quota_tick', 'remaining': remaining - 1})
+            except Exception:
+                raise
+
+        raise RuntimeError('Unreachable')
+
+    def clone_folder_recursive(
+        self,
+        source_folder_id: str,
+        dest_parent_id: str,
+        log_callback=None,
+        _stats: "dict | None" = None,
+    ) -> dict:
+        """
+        Recursively clone source_folder_id into dest_parent_id.
+        Skips files / folders that already exist (resume-safe).
+        Uses exponential backoff on quota errors.
+
+        log_callback receives either a plain str or a dict:
+          str  → log line
+          dict → structured event (quota_wait, quota_tick)
+        Returns stats dict { copied, skipped, folders_created, errors }.
+        """
+        import time as _time
+
+        if _stats is None:
+            _stats = {"copied": 0, "skipped": 0, "folders_created": 0, "errors": 0}
+
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+
+        # --- snapshot of what already exists at destination ---
+        existing = self.get_existing_items(dest_parent_id)
+
+        page_token = None
+        while True:
+            query = f"'{source_folder_id}' in parents and trashed=false"
+            resp = self.service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name, mimeType)",
+                pageSize=1000,
+                pageToken=page_token,
+            ).execute()
+
+            for item in resp.get("files", []):
+                is_folder = (item["mimeType"] == "application/vnd.google-apps.folder")
+                key = (item["name"], is_folder)
+
+                if is_folder:
+                    if key in existing:
+                        dest_folder_id = existing[key]
+                        _log(f"📁 Thư mục đã có: {item['name']} → Đang quét bên trong...")
+                    else:
+                        meta = {
+                            "name": item["name"],
+                            "mimeType": "application/vnd.google-apps.folder",
+                            "parents": [dest_parent_id],
+                        }
+                        new_folder = self.service.files().create(
+                            body=meta, fields="id"
+                        ).execute()
+                        dest_folder_id = new_folder["id"]
+                        _stats["folders_created"] += 1
+                        _log(f"📁 Đã TẠO MỚI thư mục: {item['name']}")
+
+                    # recurse
+                    self.clone_folder_recursive(
+                        item["id"], dest_folder_id, log_callback, _stats
+                    )
+
+                else:
+                    if key in existing:
+                        _stats["skipped"] += 1
+                        _log(f"  ⏩ Đã tồn tại, BỎ QUA: {item['name']}")
+                    else:
+                        file_meta = {
+                            "name": item["name"],
+                            "parents": [dest_parent_id],
+                        }
+                        try:
+                            self._copy_with_backoff(
+                                item["id"], file_meta, log_callback
+                            )
+                            _stats["copied"] += 1
+                            _log(f"  📄 Đã COPY MỚI: {item['name']}")
+                        except Exception as exc:
+                            _stats["errors"] += 1
+                            _log(f"  ❌ Lỗi khi copy {item['name']}: {exc}")
+                        _time.sleep(0.1)   # light throttle between copies
+
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+
+        return _stats
