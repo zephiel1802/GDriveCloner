@@ -32,7 +32,7 @@ if %errorLevel% neq 0 (
     echo.
     echo    LOI: Khong tim thay Python!
     echo    Vui long tai Python 3.9+ tu: https://python.org
-    echo    (Nho tick "Add Python to PATH" khi cai)
+    echo    (Nho tick "Add Python to PATH" khi cai^)
     echo.
     pause
     start https://www.python.org/downloads/
@@ -69,7 +69,7 @@ if not exist "credentials.json" (
     echo   Vui long:
     echo   1. Vao https://console.cloud.google.com
     echo   2. Bat Google Drive API
-    echo   3. Tao OAuth 2.0 Client ID (Desktop app)
+    echo   3. Tao OAuth 2.0 Client ID (Desktop app^)
     echo   4. Tai credentials.json ve va dat vao
     echo      cung thu muc voi file nay
     echo.

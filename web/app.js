@@ -309,6 +309,7 @@ const App = {
     async createShare() {
         if (!this.state.authenticated) {
             this.showToast('❌ Chưa đăng nhập. Vào tab Cài đặt để đăng nhập.', 'error');
+            this.switchTab('settings');
             return;
         }
         const hours = this._getDuration();
@@ -584,7 +585,7 @@ const App = {
 
     // ─── Folder Browser ────────────────────────────────────────────────────────
     openFolderBrowser() {
-        if (!this.state.authenticated) { this.showToast('❌ Chưa đăng nhập', 'error'); return; }
+        if (!this.state.authenticated) { this.showToast('❌ Chưa đăng nhập', 'error'); this.switchTab('settings'); return; }
         this.state.cloneFolderBrowserMode = false;
         document.getElementById('folder-modal').style.display = 'flex';
         this.state.folderStack = [{ id: 'root', name: 'My Drive' }];
@@ -695,6 +696,7 @@ const App = {
         }
         if (!this.state.authenticated) {
             this.showToast('❌ Chưa đăng nhập', 'error');
+            this.switchTab('settings');
             return;
         }
 
@@ -741,7 +743,7 @@ const App = {
     },
 
     openCloneFolderBrowser() {
-        if (!this.state.authenticated) { this.showToast('❌ Chưa đăng nhập', 'error'); return; }
+        if (!this.state.authenticated) { this.showToast('❌ Chưa đăng nhập', 'error'); this.switchTab('settings'); return; }
         this.state.cloneFolderBrowserMode = true;
         document.getElementById('folder-modal').style.display = 'flex';
         this.state.folderStack = [{ id: 'root', name: 'My Drive' }];
@@ -751,6 +753,7 @@ const App = {
     async startClone() {
         if (!this.state.authenticated) {
             this.showToast('❌ Chưa đăng nhập. Vào tab Cài đặt để đăng nhập.', 'error');
+            this.switchTab('settings');
             return;
         }
 
