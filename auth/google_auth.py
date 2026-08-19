@@ -117,7 +117,26 @@ def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
             params = parse_qs(parsed.query)
             if "code" in params:
                 code_holder.append(params["code"][0])
-                body = b"<h2>\u2705 \u0110\u0103ng nh\u1eadp th\u00e0nh c\u00f4ng! B\u1ea1n c\u00f3 th\u1ec3 \u0111\u00f3ng tab n\u00e0y.</h2>"
+                html = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>Đăng nhập thành công</title>
+                    <script>
+                        window.close();
+                        setTimeout(function() {
+                            window.location.href = "http://localhost:5001";
+                        }, 800);
+                    </script>
+                </head>
+                <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                    <h2 style="color: #4CAF50;">✅ Đăng nhập thành công!</h2>
+                    <p>Đang đưa bạn quay lại ứng dụng...</p>
+                </body>
+                </html>
+                """
+                body = html.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
