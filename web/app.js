@@ -781,9 +781,13 @@ const App = {
         this._appendCloneLog('📂 Đích: ' + this.state.cloneDestName, 'info');
         this._appendCloneLog('─'.repeat(48), 'dim');
 
+        const autoFolderInput = document.getElementById('clone-auto-folder');
+        const autoFolder = autoFolderInput ? autoFolderInput.checked : false;
+
         const payload = {
             source_id:      sourceRaw,
             dest_folder_id: this.state.cloneDestId,
+            auto_folder:    autoFolder,
         };
 
         // _streamClone handles SSE reading + auto-reconnect

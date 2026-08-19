@@ -459,6 +459,7 @@ def api_clone():
     data = request.get_json() or {}
     raw_source = (data.get('source_id') or '').strip()
     dest_id    = (data.get('dest_folder_id') or 'root').strip()
+    auto_folder = data.get('auto_folder', False)
 
     if not raw_source:
         return jsonify({'error': 'source_id is required'}), 400
@@ -487,8 +488,25 @@ def api_clone():
 
         try:
             _record({'type': 'log', 'msg': f'🔍 Source ID: {source_id}'})
+            
+            target_dest_id = dest_id
+            if auto_folder:
+                _record({'type': 'log', 'msg': '🔍 Lấy thông tin thư mục nguồn...'})
+                source_name = ds.get_folder_name(source_id)
+                
+                # Check if it already exists to support resume
+                existing = ds.get_existing_items(dest_id)
+                key = (source_name, True)
+                if key in existing:
+                    target_dest_id = existing[key]
+                    _record({'type': 'log', 'msg': f'📁 Thư mục "{source_name}" đã tồn tại tại đích, tiếp tục clone vào đó...'})
+                else:
+                    _record({'type': 'log', 'msg': f'📁 Đang tạo thư mục: {source_name} tại đích...'})
+                    new_dest = ds.create_folder(source_name, dest_id)
+                    target_dest_id = new_dest['id']
+
             _record({'type': 'log', 'msg': '🚀 Bắt đầu quét & clone...'})
-            stats = ds.clone_folder_recursive(source_id, dest_id, on_log)
+            stats = ds.clone_folder_recursive(source_id, target_dest_id, on_log)
             with _clone_jobs_lock:
                 job['status'] = 'done'
             _record({'type': 'done', 'stats': stats})
