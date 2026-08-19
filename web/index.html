@@ -189,6 +189,15 @@
                     <p class="hint-text" id="clone-create-dest-hint" style="margin-top:6px;display:none"></p>
                 </div>
 
+                <!-- Auto folder -->
+                <div class="card" style="margin-top: 12px; margin-bottom: 24px;">
+                    <label style="display: flex; align-items: center; cursor: pointer; gap: 8px;">
+                        <input type="checkbox" id="clone-auto-folder" checked style="width: 16px; height: 16px;">
+                        <span style="font-weight: 500;">Tự động tạo thư mục con (lấy tên thư mục nguồn)</span>
+                    </label>
+                    <p class="hint-text" style="margin-top: 8px;">Nếu chọn, app sẽ lấy tên thư mục từ link share (VD: "Doraemon") và tạo một thư mục tương ứng bên trong Thư mục đích, sau đó mới copy các file vào trong thư mục đó.</p>
+                </div>
+
                 <!-- Start button -->
                 <button class="btn btn-primary btn-block btn-large" id="clone-btn"
                         onclick="App.startClone()">
