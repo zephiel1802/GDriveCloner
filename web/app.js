@@ -15,15 +15,35 @@ const App = {
         cloneDestId: 'root',
         cloneDestName: 'My Drive (root)',
         cloneFolderBrowserMode: false,  // true when folder browser was opened from Clone tab
+        // Multi-link queue
+        cloneLinks: [],          // parsed array of link strings
+        cloneCurrentIndex: 0,   // index of current link being cloned
+        cloneSuccessCount: 0,
+        cloneErrorCount: 0,
+        cloneRunning: false,     // true while any clone job is in progress
     },
+
+
 
     // ─── Init ──────────────────────────────────────────────────────────────────
     async init() {
         this._bindNav();
+        this._bindBeforeUnload();
         await Promise.all([this._loadConfig(), this._checkStatus()]);
         this._initCreateTab();
         // Check credentials on first load — show alert if missing
         await this._checkCredsOnStartup();
+    },
+
+    /** Warn the user before closing tab/browser while a clone is running */
+    _bindBeforeUnload() {
+        window.addEventListener('beforeunload', (e) => {
+            if (!this.state.cloneRunning) return;
+            // Standard way to trigger browser's native confirmation dialog
+            e.preventDefault();
+            e.returnValue = 'Clone đang chạy! Nếu tắt bây giờ, quá trình sẽ bị hủy giữa chừng. Bạn chắc chắn muốn thoát?';
+            return e.returnValue;
+        });
     },
 
     _initCreateTab() {
@@ -750,6 +770,68 @@ const App = {
         this._loadFolderChildren('root');
     },
 
+    // ─── Clone Link List Helpers ───────────────────────────────────────────────
+    /** Parse textarea into valid, non-empty, non-comment lines */
+    _parseCloneLinks() {
+        const raw = (document.getElementById('clone-source-input').value || '');
+        return raw.split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0 && !l.startsWith('#'));
+    },
+
+    /** Update the link-count badge next to the section label */
+    _updateLinkCount() {
+        const links = this._parseCloneLinks();
+        const badge = document.getElementById('clone-link-count');
+        if (!badge) return;
+        badge.textContent = links.length + ' link';
+        badge.classList.toggle('empty', links.length === 0);
+    },
+
+    /** Import links from a .txt file (appends to existing content) */
+    importLinksFromFile(inputEl) {
+        const file = inputEl.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result || '';
+            const ta = document.getElementById('clone-source-input');
+            if (!ta) return;
+            const existing = ta.value.trimEnd();
+            ta.value = existing ? existing + '\n' + text.trimEnd() : text.trimEnd();
+            this._updateLinkCount();
+            this.showToast('📂 Đã import ' + this._parseCloneLinks().length + ' link', 'success');
+        };
+        reader.readAsText(file);
+        // Reset so same file can be re-selected
+        inputEl.value = '';
+    },
+
+    /** Export current links to a .txt file */
+    exportLinksToFile() {
+        const links = this._parseCloneLinks();
+        if (!links.length) {
+            this.showToast('⚠️ Chưa có link nào để xuất', 'error');
+            return;
+        }
+        const blob = new Blob([links.join('\n')], { type: 'text/plain;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'clone_links.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+        this.showToast('💾 Đã xuất ' + links.length + ' link', 'success');
+    },
+
+    /** Clear the textarea */
+    clearCloneLinks() {
+        const ta = document.getElementById('clone-source-input');
+        if (ta) ta.value = '';
+        this._updateLinkCount();
+    },
+
+    // ─── Clone ─────────────────────────────────────────────────────────────────
     async startClone() {
         if (!this.state.authenticated) {
             this.showToast('❌ Chưa đăng nhập. Vào tab Cài đặt để đăng nhập.', 'error');
@@ -757,9 +839,9 @@ const App = {
             return;
         }
 
-        const sourceRaw = (document.getElementById('clone-source-input').value || '').trim();
-        if (!sourceRaw) {
-            this.showToast('❌ Vui lòng nhập link hoặc ID nguồn', 'error');
+        const links = this._parseCloneLinks();
+        if (!links.length) {
+            this.showToast('❌ Vui lòng nhập ít nhất một link hoặc ID nguồn', 'error');
             return;
         }
 
@@ -767,31 +849,116 @@ const App = {
         const logArea   = document.getElementById('clone-log-area');
         const logBox    = document.getElementById('clone-log-box');
         const statsCard = document.getElementById('clone-stats-card');
+        const textarea  = document.getElementById('clone-source-input');
+        const toolbar   = document.querySelector('.clone-link-toolbar');
 
-        // Reset UI
+        // Lock UI during clone
         btn.disabled            = true;
         btn.textContent         = '⏳ Đang clone...';
         logArea.style.display   = 'block';
         logBox.innerHTML        = '';
         statsCard.style.display = 'none';
-        this.state.cloneJobId   = null;
-        this.state.cloneDone    = false;
+        if (textarea) textarea.readOnly = true;
+        if (toolbar)  toolbar.querySelectorAll('button').forEach(b => b.disabled = true);
 
-        this._appendCloneLog('🔗 Nguồn: ' + sourceRaw, 'info');
-        this._appendCloneLog('📂 Đích: ' + this.state.cloneDestName, 'info');
-        this._appendCloneLog('─'.repeat(48), 'dim');
+        // Reset multi-link state
+        this.state.cloneLinks        = links;
+        this.state.cloneCurrentIndex = 0;
+        this.state.cloneSuccessCount = 0;
+        this.state.cloneErrorCount   = 0;
+        this.state.cloneRunning      = true;   // ← guard beforeunload
 
         const autoFolderInput = document.getElementById('clone-auto-folder');
         const autoFolder = autoFolderInput ? autoFolderInput.checked : false;
 
-        const payload = {
-            source_id:      sourceRaw,
-            dest_folder_id: this.state.cloneDestId,
-            auto_folder:    autoFolder,
-        };
+        try {
+            await this._runCloneQueue(links, autoFolder, btn, statsCard);
+        } finally {
+            // Unlock UI — always runs even if an unexpected error is thrown
+            this.state.cloneRunning = false;   // ← release beforeunload guard
+            if (textarea) textarea.readOnly = false;
+            if (toolbar)  toolbar.querySelectorAll('button').forEach(b => b.disabled = false);
+            btn.disabled    = false;
+            btn.textContent = '🚀 Bắt đầu Clone';
+        }
+    },
 
-        // _streamClone handles SSE reading + auto-reconnect
-        await this._streamClone('/api/clone', 'POST', payload, btn, statsCard);
+
+    /**
+     * Clone a list of links sequentially.
+     * Shows a per-link header, continues even if one fails, then shows a summary.
+     */
+    async _runCloneQueue(links, autoFolder, btn, statsCard) {
+        const total = links.length;
+
+        for (let i = 0; i < total; i++) {
+            this.state.cloneCurrentIndex = i;
+            const link = links[i];
+
+            // ── Per-link header ──
+            this._appendCloneQueueHeader(`📥 Clone [${i + 1}/${total}]: ${link}`);
+            if (total > 1) {
+                this._appendCloneLog('📂 Đích: ' + this.state.cloneDestName, 'info');
+                this._appendCloneLog('─'.repeat(48), 'dim');
+            }
+
+            // Reset per-job state
+            this.state.cloneJobId = null;
+            this.state.cloneDone  = false;
+
+            const payload = {
+                source_id:      link,
+                dest_folder_id: this.state.cloneDestId,
+                auto_folder:    autoFolder,
+            };
+
+            let linkSuccess = false;
+            try {
+                await this._streamClone('/api/clone', 'POST', payload, btn, statsCard);
+                linkSuccess = this.state.cloneDone;
+            } catch (e) {
+                this._appendCloneLog('❌ Lỗi kết nối: ' + e.message, 'error');
+            }
+
+            if (linkSuccess) {
+                this.state.cloneSuccessCount++;
+            } else {
+                this.state.cloneErrorCount++;
+            }
+
+            // Separator between links
+            if (i < total - 1) {
+                this._appendCloneLog('', 'dim');
+            }
+        }
+
+        // ── Final summary (only when multi-link) ──
+        if (total > 1) {
+            const ok  = this.state.cloneSuccessCount;
+            const err = this.state.cloneErrorCount;
+            const summaryEl = document.createElement('div');
+            summaryEl.className = 'clone-queue-summary';
+            summaryEl.textContent = `✅ Hoàn tất ${ok}/${total} link${err ? ' — ❌ ' + err + ' lỗi' : ''}`;
+            const box = document.getElementById('clone-log-box');
+            if (box) { box.appendChild(summaryEl); box.scrollTop = box.scrollHeight; }
+
+            if (ok > 0) {
+                this.showToast(`🎉 Clone xong ${ok}/${total} link!`, 'success');
+            } else {
+                this.showToast('❌ Tất cả link đều thất bại', 'error');
+            }
+        }
+    },
+
+    /** Append a styled queue-header line to the log box */
+    _appendCloneQueueHeader(text) {
+        const box = document.getElementById('clone-log-box');
+        if (!box) return;
+        const el = document.createElement('div');
+        el.className = 'clone-queue-header';
+        el.textContent = text;
+        box.appendChild(el);
+        box.scrollTop = box.scrollHeight;
     },
 
     async _streamClone(url, method, payload, btn, statsCard) {
@@ -855,18 +1022,19 @@ const App = {
                         document.getElementById('stat-folders').textContent = s.folders_created ?? 0;
                         document.getElementById('stat-errors').textContent  = s.errors  ?? 0;
                         statsCard.style.display = 'grid';
-                        btn.disabled    = false;
-                        btn.textContent = '🚀 Bắt đầu Clone';
-                        this.showToast('🎉 Clone hoàn tất!', 'success');
+                        // Single-link mode: show toast here; multi-link: _runCloneQueue handles it
+                        if (this.state.cloneLinks.length <= 1) {
+                            this.showToast('🎉 Clone hoàn tất!', 'success');
+                        }
                         return true;  // finished
 
                     } else if (evt.type === 'error') {
                         this.state.cloneDone = true;
                         this._clearQuotaCountdown();
                         this._appendCloneLog('❌ Lỗi: ' + evt.msg, 'error');
-                        btn.disabled    = false;
-                        btn.textContent = '🚀 Bắt đầu Clone';
-                        this.showToast('❌ ' + evt.msg, 'error');
+                        if (this.state.cloneLinks.length <= 1) {
+                            this.showToast('❌ ' + evt.msg, 'error');
+                        }
                         return true;  // finished (with error)
                     }
                 }
@@ -880,9 +1048,6 @@ const App = {
             if (finished || this.state.cloneDone) return;
         } catch (e) {
             this._appendCloneLog('❌ ' + e.message, 'error');
-            btn.disabled    = false;
-            btn.textContent = '🚀 Bắt đầu Clone';
-            this.showToast('❌ ' + e.message, 'error');
             return;
         }
 
@@ -903,6 +1068,7 @@ const App = {
             }
         }
     },
+
 
     _startQuotaCountdown(seconds) {
         // Show a countdown badge in the log box header

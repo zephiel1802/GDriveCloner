@@ -947,3 +947,75 @@ html, body {
     margin-top: 4px;
 }
 
+
+/* ─── Multi-Link Clone UI ────────────────────────────────────────────────────── */
+
+/* Allow section-label to flex when a badge is beside the text */
+.section-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Badge showing how many valid links are queued */
+.link-count-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 20px;
+    letter-spacing: 0.03em;
+    text-transform: none;
+    line-height: 1.5;
+    transition: background var(--t);
+}
+
+.link-count-badge.empty { background: var(--border); }
+
+/* Multi-line textarea for clone source links */
+.clone-source-textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 110px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+
+/* Toolbar row below the textarea */
+.clone-link-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+/* Per-link header inside the log box */
+.clone-queue-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(79, 142, 247, 0.12);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 6px 10px;
+    margin: 8px 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+/* Final summary line in the log */
+.clone-queue-summary {
+    background: rgba(76, 175, 125, 0.12);
+    border-left: 3px solid var(--success);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 6px 10px;
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--success);
+}
