@@ -152,12 +152,40 @@
                     <p class="panel-subtitle">Copy toàn bộ file & thư mục từ link Drive được chia sẻ về Drive của bạn. Tự động bỏ qua file đã tồn tại.</p>
                 </div>
 
-                <!-- Source link -->
-                <div class="section-label">🔗 Link hoặc ID thư mục nguồn</div>
+                <!-- Source links (multi-line) -->
+                <div class="section-label">
+                    🔗 Danh sách link / ID thư mục nguồn
+                    <span class="link-count-badge" id="clone-link-count">0 link</span>
+                </div>
                 <div class="card">
-                    <input type="text" class="text-input" id="clone-source-input"
-                           placeholder="https://drive.google.com/drive/folders/... hoặc ID">
-                    <p class="hint-text" style="margin-top:8px">Nhận link share từ người khác, dán vào đây.</p>
+                    <textarea class="text-input clone-source-textarea" id="clone-source-input"
+                              rows="6"
+                              placeholder="Dán một hoặc nhiều link vào đây, mỗi link một dòng:&#10;https://drive.google.com/drive/folders/ABC123&#10;https://drive.google.com/drive/folders/DEF456&#10;1A2B3C4D5E6F7G8H9I0J&#10;&#10;(Dòng bắt đầu bằng # sẽ bị bỏ qua)"
+                              oninput="App._updateLinkCount()"></textarea>
+
+                    <!-- Toolbar -->
+                    <div class="clone-link-toolbar">
+                        <!-- Import -->
+                        <input type="file" id="clone-import-file" accept=".txt,text/plain"
+                               style="display:none" onchange="App.importLinksFromFile(this)">
+                        <button class="btn btn-outline btn-sm" onclick="document.getElementById('clone-import-file').click()">
+                            📂 Import .txt
+                        </button>
+
+                        <!-- Export -->
+                        <button class="btn btn-outline btn-sm" onclick="App.exportLinksToFile()">
+                            💾 Export .txt
+                        </button>
+
+                        <!-- Clear -->
+                        <button class="btn btn-ghost btn-sm" onclick="App.clearCloneLinks()">
+                            🧹 Xóa tất cả
+                        </button>
+                    </div>
+
+                    <p class="hint-text" style="margin-top:6px">
+                        Mỗi link một dòng. App sẽ clone tuần tự từ trên xuống, không cần chờ từng link.
+                    </p>
                 </div>
 
                 <!-- Destination folder -->
