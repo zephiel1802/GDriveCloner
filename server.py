@@ -245,6 +245,21 @@ def api_set_config():
     return jsonify({'ok': True})
 
 
+@app.route('/api/app/quit', methods=['POST'])
+def api_app_quit():
+    # Attempt to gracefully stop the Flask server
+    import os
+    import threading
+    import time
+    
+    def shutdown():
+        time.sleep(0.5)
+        os._exit(0)
+        
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({'ok': True, 'msg': 'Shutting down'})
+
+
 # ─── Queue API ────────────────────────────────────────────────────────────────
 @app.route('/api/queue')
 def api_queue():
