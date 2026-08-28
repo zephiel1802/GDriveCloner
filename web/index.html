@@ -168,25 +168,33 @@
                         <!-- Import -->
                         <input type="file" id="clone-import-file" accept=".txt,text/plain"
                                style="display:none" onchange="App.importLinksFromFile(this)">
-                        <button class="btn btn-outline btn-sm" onclick="document.getElementById('clone-import-file').click()">
+                        <button class="btn btn-outline btn-sm clone-toolbar-lockable" onclick="document.getElementById('clone-import-file').click()">
                             📂 Import .txt
                         </button>
 
                         <!-- Export -->
-                        <button class="btn btn-outline btn-sm" onclick="App.exportLinksToFile()">
+                        <button class="btn btn-outline btn-sm clone-toolbar-lockable" onclick="App.exportLinksToFile()">
                             💾 Export .txt
                         </button>
 
                         <!-- Clear -->
-                        <button class="btn btn-ghost btn-sm" onclick="App.clearCloneLinks()">
+                        <button class="btn btn-ghost btn-sm clone-toolbar-lockable" onclick="App.clearCloneLinks()">
                             🧹 Xóa tất cả
+                        </button>
+
+                        <!-- Paste — always enabled, works mid-clone -->
+                        <button class="btn btn-success btn-sm" id="clone-paste-btn"
+                                onclick="App.pasteMoreLinks()"
+                                title="Đọc clipboard và thêm link vào hàng đợi (hoạt động cả khi đang clone)">
+                            📋 Paste
                         </button>
                     </div>
 
                     <p class="hint-text" style="margin-top:6px">
-                        Mỗi link một dòng. App sẽ clone tuần tự từ trên xuống, không cần chờ từng link.
+                        Mỗi link một dòng. App sẽ clone tuần tự từ trên xuống. Có thể nhấn <strong>📋 Paste</strong> để thêm link ngay cả khi đang clone.
                     </p>
                 </div>
+
 
                 <!-- Destination folder -->
                 <div class="section-label">📂 Thư mục đích (trong Drive của bạn)</div>

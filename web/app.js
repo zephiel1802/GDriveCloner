@@ -831,7 +831,52 @@ const App = {
         this._updateLinkCount();
     },
 
-    // ─── Clone ─────────────────────────────────────────────────────────────────
+    /**
+     * Read clipboard and append links to the textarea + running queue.
+     * Works both before and during a clone session.
+     */
+    async pasteMoreLinks() {
+        let text = '';
+        try {
+            text = await navigator.clipboard.readText();
+        } catch (e) {
+            this.showToast('❌ Không đọc được clipboard: ' + e.message, 'error');
+            return;
+        }
+
+        const newLinks = text.split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0 && !l.startsWith('#'));
+
+        if (!newLinks.length) {
+            this.showToast('⚠️ Clipboard không có link hợp lệ', 'error');
+            return;
+        }
+
+        // Append to textarea
+        const ta = document.getElementById('clone-source-input');
+        if (ta) {
+            const existing = ta.value.trimEnd();
+            ta.value = existing ? existing + '\n' + newLinks.join('\n') : newLinks.join('\n');
+        }
+        this._updateLinkCount();
+
+        // If clone is running, also push into the live queue
+        if (this.state.cloneRunning) {
+            this.state.cloneLinks.push(...newLinks);
+            const added = newLinks.length;
+            const remaining = this.state.cloneLinks.length - this.state.cloneCurrentIndex - 1;
+            this._appendCloneLog(
+                `➕ Đã thêm ${added} link vào hàng đợi (còn ${remaining} link chờ)`,
+                'info'
+            );
+            this.showToast(`➕ Đã thêm ${added} link vào hàng đợi!`, 'success');
+        } else {
+            this.showToast(`📋 Đã paste ${newLinks.length} link`, 'success');
+        }
+    },
+
+
     async startClone() {
         if (!this.state.authenticated) {
             this.showToast('❌ Chưa đăng nhập. Vào tab Cài đặt để đăng nhập.', 'error');
@@ -859,7 +904,8 @@ const App = {
         logBox.innerHTML        = '';
         statsCard.style.display = 'none';
         if (textarea) textarea.readOnly = true;
-        if (toolbar)  toolbar.querySelectorAll('button').forEach(b => b.disabled = true);
+        // Only lock buttons with the lockable class — Paste button stays active
+        document.querySelectorAll('.clone-toolbar-lockable').forEach(b => b.disabled = true);
 
         // Reset multi-link state
         this.state.cloneLinks        = links;
@@ -877,7 +923,8 @@ const App = {
             // Unlock UI — always runs even if an unexpected error is thrown
             this.state.cloneRunning = false;   // ← release beforeunload guard
             if (textarea) textarea.readOnly = false;
-            if (toolbar)  toolbar.querySelectorAll('button').forEach(b => b.disabled = false);
+            document.querySelectorAll('.clone-toolbar-lockable').forEach(b => b.disabled = false);
+
             btn.disabled    = false;
             btn.textContent = '🚀 Bắt đầu Clone';
         }
@@ -889,11 +936,14 @@ const App = {
      * Shows a per-link header, continues even if one fails, then shows a summary.
      */
     async _runCloneQueue(links, autoFolder, btn, statsCard) {
-        const total = links.length;
+        // NOTE: this.state.cloneLinks may grow mid-run via pasteMoreLinks()
+        // Use index-based while loop so new links are picked up automatically.
+        let i = 0;
 
-        for (let i = 0; i < total; i++) {
+        while (i < this.state.cloneLinks.length) {
             this.state.cloneCurrentIndex = i;
-            const link = links[i];
+            const link  = this.state.cloneLinks[i];
+            const total = this.state.cloneLinks.length; // snapshot for display only
 
             // ── Per-link header ──
             this._appendCloneQueueHeader(`📥 Clone [${i + 1}/${total}]: ${link}`);
@@ -926,29 +976,33 @@ const App = {
                 this.state.cloneErrorCount++;
             }
 
-            // Separator between links
-            if (i < total - 1) {
+            i++;
+
+            // Separator if more links remain (including newly added ones)
+            if (i < this.state.cloneLinks.length) {
                 this._appendCloneLog('', 'dim');
             }
         }
 
-        // ── Final summary (only when multi-link) ──
-        if (total > 1) {
+        // ── Final summary ──
+        const finalTotal = this.state.cloneLinks.length;
+        if (finalTotal > 1) {
             const ok  = this.state.cloneSuccessCount;
             const err = this.state.cloneErrorCount;
             const summaryEl = document.createElement('div');
             summaryEl.className = 'clone-queue-summary';
-            summaryEl.textContent = `✅ Hoàn tất ${ok}/${total} link${err ? ' — ❌ ' + err + ' lỗi' : ''}`;
+            summaryEl.textContent = `✅ Hoàn tất ${ok}/${finalTotal} link${err ? ' — ❌ ' + err + ' lỗi' : ''}`;
             const box = document.getElementById('clone-log-box');
             if (box) { box.appendChild(summaryEl); box.scrollTop = box.scrollHeight; }
 
             if (ok > 0) {
-                this.showToast(`🎉 Clone xong ${ok}/${total} link!`, 'success');
+                this.showToast(`🎉 Clone xong ${ok}/${finalTotal} link!`, 'success');
             } else {
                 this.showToast('❌ Tất cả link đều thất bại', 'error');
             }
         }
     },
+
 
     /** Append a styled queue-header line to the log box */
     _appendCloneQueueHeader(text) {
