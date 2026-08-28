@@ -5,12 +5,13 @@ block_cipher = None
 HERE = Path(SPECPATH)
 
 a = Analysis(
-    [str(HERE / "main.py")],
+    [str(HERE / "tray_app.py")],
     pathex=[str(HERE)],
     binaries=[],
     datas=[
         (str(HERE / "web"), "web"),
         (str(HERE / "auth"), "auth"),
+        (str(HERE / "assets"), "assets"),
     ],
     hiddenimports=[
         "google.auth",
@@ -28,11 +29,13 @@ a = Analysis(
         "werkzeug",
         "jinja2",
         "click",
+        "pystray",
+        "PIL",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "numpy", "PIL", "scipy", "pandas"],
+    excludes=["tkinter", "matplotlib", "numpy", "scipy", "pandas"],
     cipher=block_cipher,
     noarchive=False,
 )
@@ -51,5 +54,13 @@ exe = EXE(
     strip=False,
     upx=True,
     runtime_tmpdir=None,
-    console=True,
+    console=False,
+    icon=str(HERE / "assets" / "icon.png")
+)
+
+app = BUNDLE(
+    exe,
+    name='GDriveCloner.app',
+    icon=str(HERE / "assets" / "icon.png"),
+    bundle_identifier='com.gdrivecloner.app',
 )
