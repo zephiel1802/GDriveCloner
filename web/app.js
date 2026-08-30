@@ -127,10 +127,33 @@ const App = {
         const statusEl = document.getElementById('auth-status');
 
         btn.disabled     = true;
-        btn.textContent  = '⏳ Đang mở trình duyệt...';
-        statusEl.innerHTML = '<span style="color:var(--subtext)">⏳ Đang xác thực Google...</span>';
+        btn.textContent  = '⏳ Đang chuẩn bị...';
+        statusEl.innerHTML = '<span style="color:var(--subtext)">⏳ Đang kết nối Google...</span>';
 
-        try { await fetch('/api/auth/login', { method: 'POST' }); } catch (_) {}
+        let authUrl = null;
+        try {
+            const res  = await fetch('/api/auth/login', { method: 'POST' });
+            const data = await res.json();
+            if (!data.ok) {
+                statusEl.innerHTML = `<span style="color:var(--error)">❌ ${data.error || 'Lỗi không xác định'}</span>`;
+                btn.disabled = false;
+                btn.textContent = '🔑 Đăng nhập Google';
+                return;
+            }
+            authUrl = data.auth_url;
+        } catch (e) {
+            statusEl.innerHTML = '<span style="color:var(--error)">❌ Không thể kết nối server</span>';
+            btn.disabled = false;
+            btn.textContent = '🔑 Đăng nhập Google';
+            return;
+        }
+
+        // Open Google OAuth in a new tab — browser always has permission to do this
+        if (authUrl) {
+            window.open(authUrl, '_blank');
+            btn.textContent = '⏳ Đang chờ đăng nhập...';
+            statusEl.innerHTML = '<span style="color:var(--subtext)">⏳ Đã mở tab Google — đăng nhập rồi quay lại đây...</span>';
+        }
 
         let attempts = 0;
         this.state.loginPollInterval = setInterval(async () => {

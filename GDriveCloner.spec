@@ -5,7 +5,7 @@ block_cipher = None
 HERE = Path(SPECPATH)
 
 a = Analysis(
-    [str(HERE / "tray_app.py")],
+    [str(HERE / "app.py")],
     pathex=[str(HERE)],
     binaries=[],
     datas=[
@@ -31,6 +31,8 @@ a = Analysis(
         "click",
         "pystray",
         "PIL",
+        "webview",
+        "webview.platforms",
     ],
     hookspath=[],
     hooksconfig={},

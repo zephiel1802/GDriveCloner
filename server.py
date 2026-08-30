@@ -12,6 +12,13 @@ import re as _re
 import uuid as _uuid
 from typing import Optional
 
+# Fix UnicodeEncodeError on Windows terminals using cp1252
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+
 
 def resource_path(relative_path: str) -> str:
     """
@@ -201,25 +208,35 @@ def api_login():
     if _login_state['status'] == 'running':
         return jsonify({'ok': True, 'status': 'running'})
 
+    creds_path = google_auth._find_creds()
+    if not os.path.exists(creds_path):
+        return jsonify({'ok': False, 'error': 'Chưa có credentials.json'}), 400
+
+    try:
+        auth_url = google_auth.start_oauth_flow(creds_path)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
     _login_state = {'status': 'running', 'error': None}
 
     def run():
         global _login_state
         try:
-            creds = google_auth.get_credentials()
+            creds = google_auth.wait_oauth_flow()
             if creds:
+                # Save token
+                import json as _json
+                with open(google_auth.TOKEN_FILE, 'w') as f:
+                    f.write(creds.to_json())
                 _set_ds(DriveService(creds))
                 _login_state = {'status': 'done', 'error': None}
             else:
-                _login_state = {
-                    'status': 'error',
-                    'error': 'Đăng nhập thất bại. Kiểm tra credentials.json'
-                }
+                _login_state = {'status': 'error', 'error': 'Đăng nhập thất bại'}
         except Exception as e:
             _login_state = {'status': 'error', 'error': str(e)}
 
     threading.Thread(target=run, daemon=True).start()
-    return jsonify({'ok': True, 'status': 'running'})
+    return jsonify({'ok': True, 'status': 'running', 'auth_url': auth_url})
 
 
 @app.route('/api/auth/logout', methods=['POST'])

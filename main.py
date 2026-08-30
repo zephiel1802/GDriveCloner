@@ -5,6 +5,12 @@ Drive Share Manager — Entry Point (Flask web server)
 import sys
 import os
 
+# Fix UnicodeEncodeError on Windows terminals using cp1252
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # When bundled with PyInstaller, sys._MEIPASS contains the temp extraction dir.
 # Ensure our bundled packages are importable.
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
