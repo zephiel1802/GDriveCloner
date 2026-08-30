@@ -72,8 +72,11 @@ def get_credentials() -> Optional[Credentials]:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-            except Exception:
+            except Exception as e:
+                # invalid_grant or revoked — delete stale token, force re-auth
                 creds = None
+                if os.path.exists(token_path):
+                    os.remove(token_path)
 
         if not creds:
             if not os.path.exists(creds_path):
@@ -88,23 +91,33 @@ def get_credentials() -> Optional[Credentials]:
     return creds
 
 
-def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
+# Global OAuth session state (one login at a time)
+_oauth_session: dict = {}
+
+
+def start_oauth_flow(creds_path: str) -> str:
     """
-    Run the OAuth2 installed-app flow using a fixed local redirect port.
-    Uses http://localhost:8085 — no SSL, no port=0 race condition.
-    Falls back to copy-paste if the local server can't bind.
+    Prepare the OAuth flow: bind a local callback server, generate the
+    Google auth URL and return it. The CALLER (frontend) is responsible
+    for opening the URL in a browser tab.
+    Call wait_oauth_flow() in a background thread to block until the
+    user completes login.
     """
     import socket
     import threading
-    import webbrowser
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from urllib.parse import urlparse, parse_qs
 
-    REDIRECT_PORT = 8085
-    REDIRECT_URI  = f"http://localhost:{REDIRECT_PORT}"
+    global _oauth_session
 
+    # Pick a random available port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("localhost", 0))
+        port = s.getsockname()[1]
+
+    redirect_uri = f"http://localhost:{port}"
     flow = InstalledAppFlow.from_client_secrets_file(
-        creds_path, SCOPES, redirect_uri=REDIRECT_URI
+        creds_path, SCOPES, redirect_uri=redirect_uri
     )
     auth_url, _ = flow.authorization_url(prompt="consent")
 
@@ -117,26 +130,11 @@ def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
             params = parse_qs(parsed.query)
             if "code" in params:
                 code_holder.append(params["code"][0])
-                html = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>Đăng nhập thành công</title>
-                    <script>
-                        window.close();
-                        setTimeout(function() {
-                            window.location.href = "http://localhost:5001";
-                        }, 800);
-                    </script>
-                </head>
-                <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-                    <h2 style="color: #4CAF50;">✅ Đăng nhập thành công!</h2>
-                    <p>Đang đưa bạn quay lại ứng dụng...</p>
-                </body>
-                </html>
-                """
-                body = html.encode("utf-8")
+                body = b"""<!DOCTYPE html><html><head><meta charset="utf-8">
+                <script>window.close();setTimeout(()=>{window.location.href='http://localhost:5001'},800);</script>
+                </head><body style="font-family:sans-serif;text-align:center;padding-top:60px">
+                <h2 style="color:#4CAF50">&#10003; Dang nhap thanh cong!</h2>
+                <p>Dang quay lai ung dung...</p></body></html>"""
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
@@ -149,39 +147,52 @@ def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
                 self.wfile.write(b"Auth error: " + error.encode())
 
         def log_message(self, *args):
-            pass  # silence request logs
+            pass
 
-    # Try to bind local HTTP server
-    try:
-        httpd = HTTPServer(("localhost", REDIRECT_PORT), _Handler)
-    except OSError:
-        # Port busy — fallback to copy-paste
-        print(f"\n[auth] Mở link sau trong trình duyệt:\n{auth_url}\n")
-        code = input("[auth] Dán authorization code vào đây: ").strip()
-        flow.fetch_token(code=code)
-        return flow.credentials
+    httpd = HTTPServer(("localhost", port), _Handler)
 
-    def _serve():
-        httpd.handle_request()   # one request only
+    _oauth_session = {
+        "flow": flow,
+        "httpd": httpd,
+        "code_holder": code_holder,
+        "server_error": server_error,
+    }
+    return auth_url
 
-    t = threading.Thread(target=_serve, daemon=True)
-    t.start()
 
-    webbrowser.open(auth_url)
-    print("[auth] Đang chờ đăng nhập Google trên trình duyệt...")
+def wait_oauth_flow() -> Optional[Credentials]:
+    """
+    Block until the user completes OAuth in their browser (max 120s).
+    Must be called after start_oauth_flow().
+    """
+    global _oauth_session
+    session = _oauth_session
+    if not session:
+        return None
 
-    t.join(timeout=120)
+    httpd       = session["httpd"]
+    flow        = session["flow"]
+    code_holder = session["code_holder"]
+    server_error= session["server_error"]
+
+    httpd.handle_request()   # blocks until one request arrives
     httpd.server_close()
+    _oauth_session = {}
 
     if server_error:
-        print(f"[auth] ❌ Lỗi OAuth: {server_error[0]}")
         return None
     if not code_holder:
-        print("[auth] ❌ Hết thời gian chờ. Thử lại.")
         return None
 
     flow.fetch_token(code=code_holder[0])
     return flow.credentials
+
+
+def _run_oauth_flow(creds_path: str) -> Optional[Credentials]:
+    """Legacy wrapper — kept for compatibility."""
+    auth_url = start_oauth_flow(creds_path)
+    print(f"[auth] Mo trinh duyet de dang nhap: {auth_url}")
+    return wait_oauth_flow()
 
 
 def is_authenticated() -> bool:

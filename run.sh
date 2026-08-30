@@ -60,6 +60,12 @@ fi
 
 # ── 5. Chạy app ──────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}🚀  Đang khởi động GDriveCloner...${NC}"
+echo -e "${GREEN}🚀  Dang khoi dong GDriveCloner (Desktop App)...${NC}"
 echo ""
-python3 "$SCRIPT_DIR/main.py"
+
+# pythonw chay an cua so console (macOS); fallback python3 neu khong co
+if command -v pythonw &>/dev/null; then
+    pythonw "$SCRIPT_DIR/app.py" &
+else
+    python3 "$SCRIPT_DIR/app.py" &
+fi

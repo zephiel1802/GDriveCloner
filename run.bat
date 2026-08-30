@@ -78,12 +78,13 @@ if not exist "credentials.json" (
 
 REM ── 6. Chạy app ──────────────────────────────────────────
 echo.
-echo  Dang khoi dong GDriveCloner...
+echo  Dang khoi dong GDriveCloner (Desktop App)...
+echo  Cua so app se hien ra trong giay lat...
 echo.
-python main.py
+start "" pythonw app.py
 
 if %errorLevel% neq 0 (
     echo.
-    echo  App bi loi. Xem thong bao o tren.
+    echo  App bi loi. Thu chay lai bang: python app.py
     pause
 )
