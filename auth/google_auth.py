@@ -158,7 +158,18 @@ def start_oauth_flow(creds_path: str) -> str:
         "server_error": server_error,
     }
     return auth_url
-
+    
+def cancel_oauth_flow():
+    """Abort the waiting OAuth flow by sending a cancellation request to the local server."""
+    global _oauth_session
+    if not _oauth_session:
+        return
+    import urllib.request
+    port = _oauth_session["httpd"].server_port
+    try:
+        urllib.request.urlopen(f"http://localhost:{port}/?error=cancelled", timeout=1)
+    except Exception:
+        pass
 
 def wait_oauth_flow() -> Optional[Credentials]:
     """

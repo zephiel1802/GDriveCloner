@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 GDriveCloner - Desktop App Entry Point
 Chay Flask ngam, hien thi UI trong native window (pywebview).
@@ -122,6 +122,9 @@ def _build_tray():
 # ── Window close -> minimize to tray ─────────────────────────────────────────
 def _on_window_closing():
     """pywebview calls this before closing. We hide instead of quitting."""
+    if sys.platform == "darwin":
+        os._exit(0)
+        return True
     _hide_window()
     # Returning False in pywebview 4.x cancels the close; hide() does the trick
     return False
@@ -141,9 +144,12 @@ def main():
         sys.exit(1)
     print("[app] Flask ready!")
 
-    _tray_icon = _build_tray()
-    tray_thread = threading.Thread(target=_tray_icon.run, daemon=True)
-    tray_thread.start()
+    if sys.platform != "darwin":
+        _tray_icon = _build_tray()
+        tray_thread = threading.Thread(target=_tray_icon.run, daemon=True)
+        tray_thread.start()
+    else:
+        print("[app] macOS detected, skipping tray icon to prevent main thread conflicts.")
 
     _window = webview.create_window(
         title=APP_NAME,

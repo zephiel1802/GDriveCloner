@@ -236,6 +236,11 @@ def api_login():
             _login_state = {'status': 'error', 'error': str(e)}
 
     threading.Thread(target=run, daemon=True).start()
+    
+    # Open URL natively using Python instead of relying on frontend window.open
+    import webbrowser
+    webbrowser.open(auth_url)
+    
     return jsonify({'ok': True, 'status': 'running', 'auth_url': auth_url})
 
 
@@ -245,6 +250,14 @@ def api_logout():
     google_auth.revoke_credentials()
     _set_ds(None)
     _login_state = {'status': 'idle', 'error': None}
+    return jsonify({'ok': True})
+
+
+@app.route('/api/auth/cancel', methods=['POST'])
+def api_cancel_login():
+    global _login_state
+    google_auth.cancel_oauth_flow()
+    _login_state = {'status': 'idle', 'error': 'Đã hủy đăng nhập'}
     return jsonify({'ok': True})
 
 

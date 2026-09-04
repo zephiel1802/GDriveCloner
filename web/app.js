@@ -148,14 +148,15 @@ const App = {
             return;
         }
 
-        // Open Google OAuth in a new tab — browser always has permission to do this
+        // Open Google OAuth in a new tab — now handled by backend (server.py) to fix macOS pywebview issue
         if (authUrl) {
-            window.open(authUrl, '_blank');
+            // window.open(authUrl, '_blank');
             btn.textContent = '⏳ Đang chờ đăng nhập...';
             statusEl.innerHTML = '<span style="color:var(--subtext)">⏳ Đã mở tab Google — đăng nhập rồi quay lại đây...</span>';
         }
 
         let attempts = 0;
+        document.getElementById('cancel-login-btn').style.display = 'inline-block';
         this.state.loginPollInterval = setInterval(async () => {
             attempts++;
             try {
@@ -164,6 +165,7 @@ const App = {
 
                 if (data.authenticated) {
                     clearInterval(this.state.loginPollInterval);
+                    document.getElementById('cancel-login-btn').style.display = 'none';
                     this.state.authenticated = true;
                     this._updateAuthBadge();
                     this._updateSettingsAuth(true);
@@ -172,20 +174,35 @@ const App = {
                     this._loadUserInfo();
                     this.showToast('✅ Đăng nhập thành công!', 'success');
 
-                } else if (data.login_state === 'error') {
+                } else if (data.login_state === 'error' || data.login_state === 'idle') {
                     clearInterval(this.state.loginPollInterval);
+                    document.getElementById('cancel-login-btn').style.display = 'none';
                     statusEl.innerHTML = `<span style="color:var(--error)">❌ ${data.login_error || 'Đăng nhập thất bại'}</span>`;
                     btn.disabled   = false;
                     btn.textContent = '🔑 Đăng nhập Google';
 
                 } else if (attempts > 60) {   // 2-minute timeout
                     clearInterval(this.state.loginPollInterval);
+                    document.getElementById('cancel-login-btn').style.display = 'none';
                     statusEl.innerHTML = '<span style="color:var(--error)">❌ Hết thời gian. Thử lại.</span>';
                     btn.disabled   = false;
                     btn.textContent = '🔑 Đăng nhập Google';
                 }
             } catch (_) {}
         }, 2000);
+    },
+    
+    async cancelLogin() {
+        if (this.state.loginPollInterval) {
+            clearInterval(this.state.loginPollInterval);
+        }
+        await fetch('/api/auth/cancel', { method: 'POST' });
+        document.getElementById('cancel-login-btn').style.display = 'none';
+        const btn = document.getElementById('login-btn');
+        const statusEl = document.getElementById('auth-status');
+        btn.disabled = false;
+        btn.textContent = '🔑 Đăng nhập Google';
+        statusEl.innerHTML = '<span style="color:var(--subtext)">Đã hủy đăng nhập</span>';
     },
 
     async logout() {
