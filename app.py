@@ -67,6 +67,27 @@ def _wait_for_flask(timeout=30.0):
     return False
 
 
+# ── JS <-> Python bridge ───────────────────────────────────────────────────────
+class _JsApi:
+    """Exposed to the frontend as window.pywebview.api.
+
+    The webview window has no real browser tabs/popups, and Google refuses
+    OAuth inside embedded webviews anyway, so login links must be handed off
+    to the OS default browser.
+    """
+
+    def open_external(self, url):
+        import webbrowser
+        print(f"[app] open_external called: {url}")
+        try:
+            ok = webbrowser.open(url)
+            print(f"[app] webbrowser.open returned: {ok}")
+            return bool(ok)
+        except Exception as e:
+            print(f"[app] webbrowser.open FAILED: {e}")
+            return False
+
+
 # ── Window ────────────────────────────────────────────────────────────────────
 def _show_window():
     global _window
@@ -122,6 +143,8 @@ def _build_tray():
 # ── Window close -> minimize to tray ─────────────────────────────────────────
 def _on_window_closing():
     """pywebview calls this before closing. We hide instead of quitting."""
+    if _tray_icon is None:
+        return True  # no tray to minimize to -> allow real close
     _hide_window()
     # Returning False in pywebview 4.x cancels the close; hide() does the trick
     return False
@@ -141,9 +164,16 @@ def main():
         sys.exit(1)
     print("[app] Flask ready!")
 
-    _tray_icon = _build_tray()
-    tray_thread = threading.Thread(target=_tray_icon.run, daemon=True)
-    tray_thread.start()
+    # pystray drives AppKit under the hood, and AppKit only allows the main
+    # thread to run its event loop. On macOS, webview.start() below also
+    # needs the main thread, so running pystray on a background thread here
+    # crashes the process (SIGTRAP / EXC_BREAKPOINT). Disable tray on macOS.
+    if sys.platform != 'darwin':
+        _tray_icon = _build_tray()
+        tray_thread = threading.Thread(target=_tray_icon.run, daemon=True)
+        tray_thread.start()
+    else:
+        print("[app] Tray icon disabled on macOS (AppKit main-thread restriction).")
 
     _window = webview.create_window(
         title=APP_NAME,
@@ -153,6 +183,7 @@ def main():
         min_size=(800, 600),
         resizable=True,
         text_select=True,
+        js_api=_JsApi(),
     )
     _window.events.closing += _on_window_closing
 

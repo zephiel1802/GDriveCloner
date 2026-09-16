@@ -25,6 +25,38 @@ const App = {
 
 
 
+    /**
+     * Open a URL in the system's default browser.
+     * Inside the pywebview desktop app, `window.open()` cannot escape the
+     * embedded webview (and Google blocks OAuth there anyway), so we call
+     * back into Python via the js_api bridge instead. Falls back to
+     * window.open() when running in a regular browser tab (main.py).
+     */
+    async _openExternal(url) {
+        // pywebview injects window.pywebview asynchronously; if we're inside
+        // the desktop app but it hasn't landed yet, wait briefly instead of
+        // silently falling back to window.open() (which does nothing there).
+        if (window.pywebview === undefined && document.readyState !== 'complete') {
+            await new Promise(resolve => {
+                const onReady = () => { window.removeEventListener('pywebviewready', onReady); resolve(); };
+                window.addEventListener('pywebviewready', onReady);
+                setTimeout(resolve, 1500);
+            });
+        }
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+            try {
+                const ok = await window.pywebview.api.open_external(url);
+                console.log('[app] open_external via pywebview bridge ->', ok);
+                return;
+            } catch (e) {
+                console.error('[app] pywebview.api.open_external failed, falling back to window.open', e);
+            }
+        } else {
+            console.log('[app] no pywebview bridge detected, using window.open (regular browser tab)');
+        }
+        window.open(url, '_blank');
+    },
+
     // ─── Init ──────────────────────────────────────────────────────────────────
     async init() {
         this._bindNav();
@@ -148,9 +180,10 @@ const App = {
             return;
         }
 
-        // Open Google OAuth in a new tab — browser always has permission to do this
+        // Open Google OAuth in the system browser (required — Google blocks
+        // embedded webviews, and window.open() can't escape pywebview anyway)
         if (authUrl) {
-            window.open(authUrl, '_blank');
+            await this._openExternal(authUrl);
             btn.textContent = '⏳ Đang chờ đăng nhập...';
             statusEl.innerHTML = '<span style="color:var(--subtext)">⏳ Đã mở tab Google — đăng nhập rồi quay lại đây...</span>';
         }
@@ -512,7 +545,7 @@ const App = {
             btn.addEventListener('click', () => this.deleteShare(btn.dataset.id, btn.dataset.name))
         );
         container.querySelectorAll('[data-action="open"]').forEach(btn =>
-            btn.addEventListener('click', () => window.open(btn.dataset.url, '_blank'))
+            btn.addEventListener('click', () => this._openExternal(btn.dataset.url))
         );
         container.querySelectorAll('[data-action="copy"]').forEach(btn =>
             btn.addEventListener('click', () => {
