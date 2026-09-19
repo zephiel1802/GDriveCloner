@@ -428,21 +428,39 @@ _clone_jobs_lock = threading.Lock()
 SSE_PING_INTERVAL = 15   # seconds between keepalive pings (keeps proxies alive)
 
 
-def _parse_drive_folder_id(raw: str) -> str:
+def _parse_drive_id(raw: str) -> str:
     """
-    Accept multiple input formats and return the bare folder ID:
+    Accept multiple input formats and return the bare Drive ID (folder or file):
       - https://drive.google.com/drive/folders/<id>
       - https://drive.google.com/drive/u/0/folders/<id>
       - https://drive.google.com/drive/u/0/folders/<id>?usp=sharing
-      - bare ID (any alphanumeric string)
+      - https://drive.google.com/file/d/<id>
+      - https://drive.google.com/file/d/<id>/view
+      - https://drive.google.com/file/d/<id>/view?usp=sharing
+      - https://drive.google.com/open?id=<id>
+      - https://drive.google.com/uc?id=<id>
+      - https://docs.google.com/.../d/<id>/...
+      - bare ID (any alphanumeric string with - or _)
     """
     raw = raw.strip()
+    # 1. /folders/<id>
     match = _re.search(r'/folders/([a-zA-Z0-9_-]{10,})', raw)
     if match:
         return match.group(1)
+    # 2. /d/<id> (covers /file/d/<id>, /document/d/<id>, /spreadsheets/d/<id>, etc.)
+    match = _re.search(r'/d/([a-zA-Z0-9_-]{10,})', raw)
+    if match:
+        return match.group(1)
+    # 3. id=<id> (covers open?id=..., uc?id=...)
+    match = _re.search(r'[?&]id=([a-zA-Z0-9_-]{10,})', raw)
+    if match:
+        return match.group(1)
+    # 4. Bare ID
     if _re.fullmatch(r'[a-zA-Z0-9_-]{10,}', raw):
         return raw
     return raw  # let the API call fail with a meaningful error
+
+_parse_drive_folder_id = _parse_drive_id
 
 
 def _sse_stream(job_id: str):
@@ -466,7 +484,7 @@ def _sse_stream(job_id: str):
 
     # If job is already finished, stop here
     with _clone_jobs_lock:
-        done = job['status'] in ('done', 'error')
+        done = job['status'] in ('done', 'error', 'cancelled')
     if done:
         return
 
@@ -476,7 +494,7 @@ def _sse_stream(job_id: str):
         try:
             item = log_q.get(timeout=SSE_PING_INTERVAL)
             yield 'data: ' + json.dumps(item, ensure_ascii=False) + '\n\n'
-            if item.get('type') in ('done', 'error'):
+            if item.get('type') in ('done', 'error', 'cancelled'):
                 break
         except q_module.Empty:
             yield 'data: {"type":"ping"}\n\n'
@@ -496,11 +514,12 @@ def api_clone():
     if not raw_source:
         return jsonify({'error': 'source_id is required'}), 400
 
-    source_id = _parse_drive_folder_id(raw_source)
+    source_id = _parse_drive_id(raw_source)
     job_id    = _uuid.uuid4().hex
     log_q: q_module.Queue = q_module.Queue()
+    cancel_event = threading.Event()
 
-    job = {'queue': log_q, 'status': 'running', 'log': []}
+    job = {'queue': log_q, 'status': 'running', 'log': [], 'cancel_event': cancel_event}
     with _clone_jobs_lock:
         _clone_jobs[job_id] = job
 
@@ -520,32 +539,64 @@ def api_clone():
 
         try:
             _record({'type': 'log', 'msg': f'🔍 Source ID: {source_id}'})
-            
-            target_dest_id = dest_id
-            if auto_folder:
-                _record({'type': 'log', 'msg': '🔍 Lấy thông tin thư mục nguồn...'})
-                source_name = ds.get_folder_name(source_id)
-                
-                # Check if it already exists to support resume
-                existing = ds.get_existing_items(dest_id)
-                key = (source_name, True)
-                if key in existing:
-                    target_dest_id = existing[key]
-                    _record({'type': 'log', 'msg': f'📁 Thư mục "{source_name}" đã tồn tại tại đích, tiếp tục clone vào đó...'})
-                else:
-                    _record({'type': 'log', 'msg': f'📁 Đang tạo thư mục: {source_name} tại đích...'})
-                    new_dest = ds.create_folder(source_name, dest_id)
-                    target_dest_id = new_dest['id']
+            _record({'type': 'log', 'msg': '🔍 Đang kiểm tra thông tin nguồn...'})
 
-            _record({'type': 'log', 'msg': '🚀 Bắt đầu quét & clone...'})
-            stats = ds.clone_folder_recursive(source_id, target_dest_id, on_log)
-            with _clone_jobs_lock:
-                job['status'] = 'done'
-            _record({'type': 'done', 'stats': stats})
+            if cancel_event.is_set():
+                _record({'type': 'error', 'msg': '⛔ Tiến trình đã bị hủy.'})
+                return
+
+            item_info = ds.get_item_info(source_id)
+            is_folder = item_info.get('is_folder', False)
+            source_name = item_info.get('name', source_id)
+            actual_id = item_info.get('id', source_id)
+
+            if cancel_event.is_set():
+                _record({'type': 'error', 'msg': '⛔ Tiến trình đã bị hủy.'})
+                return
+
+            if is_folder:
+                target_dest_id = dest_id
+                if auto_folder:
+                    _record({'type': 'log', 'msg': f'📁 Thư mục nguồn: {source_name}'})
+                    
+                    # Check if it already exists to support resume
+                    existing = ds.get_existing_items(dest_id)
+                    key = (source_name, True)
+                    if key in existing:
+                        target_dest_id = existing[key]
+                        _record({'type': 'log', 'msg': f'📁 Thư mục "{source_name}" đã tồn tại tại đích, tiếp tục clone vào đó...'})
+                    else:
+                        _record({'type': 'log', 'msg': f'📁 Đang tạo thư mục: {source_name} tại đích...'})
+                        new_dest = ds.create_folder(source_name, dest_id)
+                        target_dest_id = new_dest['id']
+
+                _record({'type': 'log', 'msg': '🚀 Bắt đầu quét & clone thư mục...'})
+                stats = ds.clone_folder_recursive(actual_id, target_dest_id, on_log, cancel_event=cancel_event)
+            else:
+                _record({'type': 'log', 'msg': f'📄 File nguồn: {source_name}'})
+                _record({'type': 'log', 'msg': '🚀 Bắt đầu clone file...'})
+                stats = ds.clone_file(actual_id, dest_id, source_name, on_log, cancel_event=cancel_event)
+
+            if cancel_event.is_set():
+                with _clone_jobs_lock:
+                    job['status'] = 'cancelled'
+                _record({'type': 'error', 'msg': '⛔ Tiến trình đã bị hủy.'})
+            else:
+                with _clone_jobs_lock:
+                    job['status'] = 'done'
+                _record({'type': 'done', 'stats': stats})
         except Exception as exc:
             with _clone_jobs_lock:
                 job['status'] = 'error'
-            _record({'type': 'error', 'msg': str(exc)})
+
+            # Format friendly error message for HTTP errors
+            err_msg = str(exc)
+            status_code = getattr(getattr(exc, 'resp', None), 'status', None)
+            if status_code == 404:
+                err_msg = f'Không tìm thấy file/thư mục (404 Not Found). Kiểm tra lại link hoặc quyền chia sẻ. Chi tiết: {exc}'
+            elif status_code == 403:
+                err_msg = f'Không có quyền truy cập file/thư mục (403 Forbidden). Cần quyền xem/tải từ chủ sở hữu. Chi tiết: {exc}'
+            _record({'type': 'error', 'msg': err_msg})
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -560,9 +611,27 @@ def api_clone():
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive',
+            'Connection': 'close',
         },
     )
+
+
+@app.route('/api/clone/<job_id>/cancel', methods=['POST'])
+def api_clone_cancel(job_id: str):
+    """Cancel a running clone job."""
+    with _clone_jobs_lock:
+        job = _clone_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    cancel_ev = job.get('cancel_event')
+    if cancel_ev:
+        cancel_ev.set()
+    with _clone_jobs_lock:
+        job['status'] = 'cancelled'
+    log_q = job.get('queue')
+    if log_q:
+        log_q.put({'type': 'error', 'msg': '⛔ Tiến trình clone đã bị hủy theo yêu cầu.'})
+    return jsonify({'ok': True})
 
 
 @app.route('/api/clone/<job_id>/stream')
@@ -577,7 +646,7 @@ def api_clone_stream(job_id: str):
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive',
+            'Connection': 'close',
         },
     )
 
@@ -597,3 +666,4 @@ def api_clone_status(job_id: str):
                     resp['stats'] = evt.get('stats')
                     break
     return jsonify(resp)
+

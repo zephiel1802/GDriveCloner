@@ -25,33 +25,40 @@ def _get_data_dir() -> str:
 DATA_DIR = _get_data_dir()
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 
-_DEFAULTS = {
+DEFAULT_CONFIG = {
     "source_folder_id": "root",
     "source_folder_name": "My Drive",
-    "default_duration_hours": 24,
+    "default_duration_hours": 12,
     "temp_folder_prefix": "Tài liệu Share Tạm - ",
     "last_link": "",
+    "terabox_mount_path": "T:\\"
 }
 
 
 def load() -> dict:
-    path = os.path.abspath(CONFIG_PATH)
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Merge with defaults for any missing keys
-        return {**_DEFAULTS, **data}
-    return dict(_DEFAULTS)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Merge with defaults
+                for k, v in DEFAULT_CONFIG.items():
+                    if k not in data:
+                        data[k] = v
+                return data
+        except Exception:
+            return DEFAULT_CONFIG.copy()
+    return DEFAULT_CONFIG.copy()
 
 
-def save(cfg: dict):
-    path = os.path.abspath(CONFIG_PATH)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+def save(config: dict):
+    # keep only known keys
+    clean_config = {k: config.get(k, DEFAULT_CONFIG[k]) for k in DEFAULT_CONFIG.keys()}
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(clean_config, f, indent=2, ensure_ascii=False)
 
 
 def get(key: str):
-    return load().get(key, _DEFAULTS.get(key))
+    return load().get(key, DEFAULT_CONFIG.get(key))
 
 
 def set_value(key: str, value):

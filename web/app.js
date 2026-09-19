@@ -21,6 +21,8 @@ const App = {
         cloneSuccessCount: 0,
         cloneErrorCount: 0,
         cloneRunning: false,     // true while any clone job is in progress
+        cloneCancelled: false,
+        cloneAbortController: null,
     },
 
 
@@ -31,6 +33,7 @@ const App = {
         this._bindBeforeUnload();
         await Promise.all([this._loadConfig(), this._checkStatus()]);
         this._initCreateTab();
+        this._initCloneTab();
         // Check credentials on first load — show alert if missing
         await this._checkCredsOnStartup();
     },
@@ -50,6 +53,19 @@ const App = {
         const nameInput = document.getElementById('folder-name');
         if (nameInput) nameInput.value = this._defaultFolderName();
         this.selectDuration(this.state.config.default_duration_hours || 24);
+    },
+
+    _initCloneTab() {
+        const ta = document.getElementById('clone-source-input');
+        if (ta) {
+            ta.addEventListener('paste', (e) => {
+                if (this.state.cloneRunning) {
+                    e.preventDefault();
+                    const text = (e.clipboardData || window.clipboardData).getData('text');
+                    if (text) this._addLinksToQueue(text);
+                }
+            });
+        }
     },
 
     // ─── Navigation ────────────────────────────────────────────────────────────
@@ -818,12 +834,7 @@ const App = {
         const reader = new FileReader();
         reader.onload = (e) => {
             const text = e.target.result || '';
-            const ta = document.getElementById('clone-source-input');
-            if (!ta) return;
-            const existing = ta.value.trimEnd();
-            ta.value = existing ? existing + '\n' + text.trimEnd() : text.trimEnd();
-            this._updateLinkCount();
-            this.showToast('📂 Đã import ' + this._parseCloneLinks().length + ' link', 'success');
+            this._addLinksToQueue(text);
         };
         reader.readAsText(file);
         // Reset so same file can be re-selected
@@ -849,30 +860,23 @@ const App = {
 
     /** Clear the textarea */
     clearCloneLinks() {
+        if (this.state.cloneRunning) {
+            this.showToast('⚠️ Đang clone, không thể xóa danh sách', 'warn');
+            return;
+        }
         const ta = document.getElementById('clone-source-input');
         if (ta) ta.value = '';
         this._updateLinkCount();
     },
 
-    /**
-     * Read clipboard and append links to the textarea + running queue.
-     * Works both before and during a clone session.
-     */
-    async pasteMoreLinks() {
-        let text = '';
-        try {
-            text = await navigator.clipboard.readText();
-        } catch (e) {
-            this.showToast('❌ Không đọc được clipboard: ' + e.message, 'error');
-            return;
-        }
-
-        const newLinks = text.split('\n')
+    /** Add links to textarea and active clone queue if running */
+    _addLinksToQueue(text) {
+        const newLinks = (text || '').split(/\r?\n/)
             .map(l => l.trim())
             .filter(l => l.length > 0 && !l.startsWith('#'));
 
         if (!newLinks.length) {
-            this.showToast('⚠️ Clipboard không có link hợp lệ', 'error');
+            this.showToast('⚠️ Không tìm thấy link hợp lệ', 'error');
             return;
         }
 
@@ -895,8 +899,23 @@ const App = {
             );
             this.showToast(`➕ Đã thêm ${added} link vào hàng đợi!`, 'success');
         } else {
-            this.showToast(`📋 Đã paste ${newLinks.length} link`, 'success');
+            this.showToast(`📋 Đã thêm ${newLinks.length} link`, 'success');
         }
+    },
+
+    /**
+     * Read clipboard and append links to the textarea + running queue.
+     * Works both before and during a clone session.
+     */
+    async pasteMoreLinks() {
+        let text = '';
+        try {
+            text = await navigator.clipboard.readText();
+        } catch (e) {
+            this.showToast('❌ Không đọc được clipboard: ' + e.message, 'error');
+            return;
+        }
+        this._addLinksToQueue(text);
     },
 
 
@@ -914,42 +933,87 @@ const App = {
         }
 
         const btn       = document.getElementById('clone-btn');
+        const cancelBtn = document.getElementById('clone-cancel-btn');
         const logArea   = document.getElementById('clone-log-area');
         const logBox    = document.getElementById('clone-log-box');
         const statsCard = document.getElementById('clone-stats-card');
-        const textarea  = document.getElementById('clone-source-input');
-        const toolbar   = document.querySelector('.clone-link-toolbar');
 
         // Lock UI during clone
         btn.disabled            = true;
         btn.textContent         = '⏳ Đang clone...';
+        if (cancelBtn) {
+            cancelBtn.style.display = 'block';
+            cancelBtn.disabled      = false;
+            cancelBtn.textContent   = '⛔ Dừng / Hủy';
+        }
         logArea.style.display   = 'block';
         logBox.innerHTML        = '';
         statsCard.style.display = 'none';
-        if (textarea) textarea.readOnly = true;
-        // Only lock buttons with the lockable class — Paste button stays active
-        document.querySelectorAll('.clone-toolbar-lockable').forEach(b => b.disabled = true);
 
         // Reset multi-link state
-        this.state.cloneLinks        = links;
+        this.state.cloneLinks        = [...links];
         this.state.cloneCurrentIndex = 0;
         this.state.cloneSuccessCount = 0;
         this.state.cloneErrorCount   = 0;
         this.state.cloneRunning      = true;   // ← guard beforeunload
+        this.state.cloneCancelled    = false;
+        this.state.cloneJobId        = null;
 
         const autoFolderInput = document.getElementById('clone-auto-folder');
         const autoFolder = autoFolderInput ? autoFolderInput.checked : false;
 
         try {
-            await this._runCloneQueue(links, autoFolder, btn, statsCard);
+            await this._runCloneQueue(autoFolder, btn, statsCard);
         } finally {
-            // Unlock UI — always runs even if an unexpected error is thrown
-            this.state.cloneRunning = false;   // ← release beforeunload guard
-            if (textarea) textarea.readOnly = false;
-            document.querySelectorAll('.clone-toolbar-lockable').forEach(b => b.disabled = false);
+            this._finishClone();
+        }
+    },
 
+    async cancelClone() {
+        if (!this.state.cloneRunning) return;
+
+        const cancelBtn = document.getElementById('clone-cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.disabled = true;
+            cancelBtn.textContent = '⏳ Đang dừng...';
+        }
+
+        this.state.cloneCancelled = true;
+        this._appendCloneLog('⛔ Đang dừng tiến trình clone theo yêu cầu người dùng...', 'warn');
+
+        // Abort stream fetch / reader
+        if (this.state.cloneAbortController) {
+            try {
+                this.state.cloneAbortController.abort();
+            } catch (_) {}
+        }
+
+        // Notify backend to stop copying files immediately
+        const jobId = this.state.cloneJobId;
+        if (jobId) {
+            try {
+                await fetch(`/api/clone/${jobId}/cancel`, { method: 'POST' });
+            } catch (_) {}
+        }
+
+        this.showToast('⛔ Đã dừng tiến trình clone', 'warn');
+    },
+
+    _finishClone() {
+        this.state.cloneRunning = false;
+        this.state.cloneAbortController = null;
+
+        const btn       = document.getElementById('clone-btn');
+        const cancelBtn = document.getElementById('clone-cancel-btn');
+
+        if (btn) {
             btn.disabled    = false;
             btn.textContent = '🚀 Bắt đầu Clone';
+        }
+        if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+            cancelBtn.disabled      = false;
+            cancelBtn.textContent   = '⛔ Dừng / Hủy';
         }
     },
 
@@ -958,12 +1022,15 @@ const App = {
      * Clone a list of links sequentially.
      * Shows a per-link header, continues even if one fails, then shows a summary.
      */
-    async _runCloneQueue(links, autoFolder, btn, statsCard) {
-        // NOTE: this.state.cloneLinks may grow mid-run via pasteMoreLinks()
-        // Use index-based while loop so new links are picked up automatically.
+    async _runCloneQueue(autoFolder, btn, statsCard) {
         let i = 0;
 
         while (i < this.state.cloneLinks.length) {
+            if (this.state.cloneCancelled) {
+                this._appendCloneLog('⛔ Quá trình clone đã dừng.', 'warn');
+                break;
+            }
+
             this.state.cloneCurrentIndex = i;
             const link  = this.state.cloneLinks[i];
             const total = this.state.cloneLinks.length; // snapshot for display only
@@ -990,7 +1057,14 @@ const App = {
                 await this._streamClone('/api/clone', 'POST', payload, btn, statsCard);
                 linkSuccess = this.state.cloneDone;
             } catch (e) {
-                this._appendCloneLog('❌ Lỗi kết nối: ' + e.message, 'error');
+                if (!this.state.cloneCancelled) {
+                    this._appendCloneLog('❌ Lỗi kết nối: ' + e.message, 'error');
+                }
+            }
+
+            if (this.state.cloneCancelled) {
+                this._appendCloneLog('⛔ Quá trình clone đã dừng.', 'warn');
+                break;
             }
 
             if (linkSuccess) {
@@ -1002,12 +1076,16 @@ const App = {
             i++;
 
             // Separator if more links remain (including newly added ones)
-            if (i < this.state.cloneLinks.length) {
+            if (i < this.state.cloneLinks.length && !this.state.cloneCancelled) {
                 this._appendCloneLog('', 'dim');
             }
         }
 
         // ── Final summary ──
+        if (this.state.cloneCancelled) {
+            return;
+        }
+
         const finalTotal = this.state.cloneLinks.length;
         if (finalTotal > 1) {
             const ok  = this.state.cloneSuccessCount;
@@ -1041,16 +1119,30 @@ const App = {
     async _streamClone(url, method, payload, btn, statsCard) {
         const MAX_RECONNECT_DELAY = 30000;  // ms
         let reconnectDelay = 2000;
-        let isFirstConnect = true;
 
         const doStream = async (streamUrl, streamMethod, streamPayload) => {
+            if (this.state.cloneCancelled) return true;
+
+            const abortController = new AbortController();
+            this.state.cloneAbortController = abortController;
+
             const opts = {
                 method:  streamMethod,
                 headers: { 'Content-Type': 'application/json' },
+                signal:  abortController.signal,
             };
             if (streamPayload) opts.body = JSON.stringify(streamPayload);
 
-            const response = await fetch(streamUrl, opts);
+            let response;
+            try {
+                response = await fetch(streamUrl, opts);
+            } catch (e) {
+                if (abortController.signal.aborted || this.state.cloneCancelled) {
+                    return true;
+                }
+                throw e;
+            }
+
             if (!response.ok) {
                 const err = await response.json().catch(() => ({ error: 'Network error' }));
                 throw new Error(err.error || 'HTTP ' + response.status);
@@ -1060,60 +1152,72 @@ const App = {
             const decoder = new TextDecoder();
             let buffer = '';
 
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    let evt;
-                    try { evt = JSON.parse(line.slice(6)); } catch (_) { continue; }
-                    if (evt.type === 'ping') continue;
+            try {
+                while (true) {
+                    if (this.state.cloneCancelled) return true;
 
-                    // Reset reconnect delay on successful data
-                    reconnectDelay = 2000;
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        let evt;
+                        try { evt = JSON.parse(line.slice(6)); } catch (_) { continue; }
+                        if (evt.type === 'ping') continue;
 
-                    if (evt.type === 'job_id') {
-                        this.state.cloneJobId = evt.job_id;
+                        // Reset reconnect delay on successful data
+                        reconnectDelay = 2000;
 
-                    } else if (evt.type === 'log') {
-                        this._appendCloneLog(evt.msg);
+                        if (evt.type === 'job_id') {
+                            this.state.cloneJobId = evt.job_id;
 
-                    } else if (evt.type === 'quota_wait') {
-                        this._appendCloneLog(evt.msg || ('⏳ Quota exceeded — chờ ' + evt.seconds + 's...'), 'info');
-                        this._startQuotaCountdown(evt.seconds);
+                        } else if (evt.type === 'log') {
+                            this._appendCloneLog(evt.msg);
 
-                    } else if (evt.type === 'quota_tick') {
-                        this._updateQuotaCountdown(evt.remaining);
+                        } else if (evt.type === 'quota_wait') {
+                            this._appendCloneLog(evt.msg || ('⏳ Quota exceeded — chờ ' + evt.seconds + 's...'), 'info');
+                            this._startQuotaCountdown(evt.seconds);
 
-                    } else if (evt.type === 'done') {
-                        this.state.cloneDone = true;
-                        this._clearQuotaCountdown();
-                        this._appendCloneLog('─'.repeat(48), 'dim');
-                        this._appendCloneLog('🎉 HOÀN THÀNH!', 'success');
-                        const s = evt.stats || {};
-                        document.getElementById('stat-copied').textContent  = s.copied  ?? 0;
-                        document.getElementById('stat-skipped').textContent = s.skipped ?? 0;
-                        document.getElementById('stat-folders').textContent = s.folders_created ?? 0;
-                        document.getElementById('stat-errors').textContent  = s.errors  ?? 0;
-                        statsCard.style.display = 'grid';
-                        // Single-link mode: show toast here; multi-link: _runCloneQueue handles it
-                        if (this.state.cloneLinks.length <= 1) {
-                            this.showToast('🎉 Clone hoàn tất!', 'success');
+                        } else if (evt.type === 'quota_tick') {
+                            this._updateQuotaCountdown(evt.remaining);
+
+                        } else if (evt.type === 'done') {
+                            this.state.cloneDone = true;
+                            this._clearQuotaCountdown();
+                            this._appendCloneLog('─'.repeat(48), 'dim');
+                            this._appendCloneLog('🎉 HOÀN THÀNH!', 'success');
+                            const s = evt.stats || {};
+                            document.getElementById('stat-copied').textContent  = s.copied  ?? 0;
+                            document.getElementById('stat-skipped').textContent = s.skipped ?? 0;
+                            document.getElementById('stat-folders').textContent = s.folders_created ?? 0;
+                            document.getElementById('stat-errors').textContent  = s.errors  ?? 0;
+                            statsCard.style.display = 'grid';
+                            // Single-link mode: show toast here; multi-link: _runCloneQueue handles it
+                            if (this.state.cloneLinks.length <= 1) {
+                                this.showToast('🎉 Clone hoàn tất!', 'success');
+                            }
+                            return true;  // finished
+
+                        } else if (evt.type === 'error') {
+                            this.state.cloneDone = true;
+                            this._clearQuotaCountdown();
+                            this._appendCloneLog('❌ Lỗi: ' + evt.msg, 'error');
+                            if (this.state.cloneLinks.length <= 1) {
+                                this.showToast('❌ ' + evt.msg, 'error');
+                            }
+                            return true;  // finished (with error)
                         }
-                        return true;  // finished
-
-                    } else if (evt.type === 'error') {
-                        this.state.cloneDone = true;
-                        this._clearQuotaCountdown();
-                        this._appendCloneLog('❌ Lỗi: ' + evt.msg, 'error');
-                        if (this.state.cloneLinks.length <= 1) {
-                            this.showToast('❌ ' + evt.msg, 'error');
-                        }
-                        return true;  // finished (with error)
                     }
+                }
+            } finally {
+                // Ensure the reader is explicitly cancelled and socket released!
+                try {
+                    await reader.cancel();
+                } catch (_) {}
+                if (this.state.cloneAbortController === abortController) {
+                    this.state.cloneAbortController = null;
                 }
             }
             return false;  // stream ended but not finished
@@ -1122,26 +1226,31 @@ const App = {
         // First connection
         try {
             const finished = await doStream(url, method, payload);
-            if (finished || this.state.cloneDone) return;
+            if (finished || this.state.cloneDone || this.state.cloneCancelled) return;
         } catch (e) {
-            this._appendCloneLog('❌ ' + e.message, 'error');
+            if (!this.state.cloneCancelled) {
+                this._appendCloneLog('❌ ' + e.message, 'error');
+            }
             return;
         }
 
         // Auto-reconnect loop (stream dropped without done/error)
-        while (!this.state.cloneDone) {
+        while (!this.state.cloneDone && !this.state.cloneCancelled) {
             const jobId = this.state.cloneJobId;
             if (!jobId) break;
 
             this._appendCloneLog(`🔄 Mất kết nối. Đang kết nối lại sau ${reconnectDelay / 1000}s...`, 'info');
             await new Promise(r => setTimeout(r, reconnectDelay));
+            if (this.state.cloneCancelled) break;
             reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 
             try {
                 const finished = await doStream(`/api/clone/${jobId}/stream`, 'GET', null);
-                if (finished || this.state.cloneDone) return;
+                if (finished || this.state.cloneDone || this.state.cloneCancelled) return;
             } catch (e) {
-                this._appendCloneLog(`⚠️ Reconnect thất bại: ${e.message}`, 'error');
+                if (!this.state.cloneCancelled) {
+                    this._appendCloneLog(`⚠️ Reconnect thất bại: ${e.message}`, 'error');
+                }
             }
         }
     },
@@ -1209,5 +1318,344 @@ const App = {
             .replace(/"/g, '&quot;');
     },
 };
+
+// ============================================================================
+// TeraBox Clone JS Logic
+// ============================================================================
+
+Object.assign(App, {
+    // ─── Browser / State ──────────────────────────────────────────────────────────
+    teraboxJobId: null,
+    teraboxEventSource: null,
+    teraboxCurrentPath: '',
+
+    openTeraBoxBrowser() {
+        const modal = document.getElementById('folder-modal');
+        const title = modal.querySelector('.modal-title');
+        title.innerHTML = '☁️ Chọn file / thư mục từ TeraBox';
+        
+        // Custom browse logic for TeraBox
+        this._fetchTeraBoxPath(''); // root path (reads from config.json)
+        modal.style.display = 'flex';
+    },
+
+    async _fetchTeraBoxPath(path) {
+        const list = document.getElementById('folder-list');
+        list.innerHTML = '<div class="empty-state">⏳ Đang đọc thư mục...</div>';
+        
+        try {
+            const url = path ? `/api/terabox/browse?path=${encodeURIComponent(path)}` : '/api/terabox/browse';
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            if (!data.ok) throw new Error(data.error);
+            
+            this.teraboxCurrentPath = data.path;
+            
+            // Build UI
+            this._renderTeraBoxBreadcrumb(data.path);
+            this._renderTeraBoxList(data.items, data.path);
+        } catch (e) {
+            list.innerHTML = `<div class="empty-state" style="color:var(--error)">❌ Lỗi: ${e.message}</div>`;
+        }
+    },
+
+    _renderTeraBoxBreadcrumb(fullPath) {
+        const bc = document.getElementById('folder-breadcrumb');
+        const parts = fullPath.split(/[\\/]/).filter(Boolean);
+        
+        let html = '';
+        let currentBuild = '';
+        
+        parts.forEach((part, i) => {
+            currentBuild += (i === 0 ? part : '\\' + part);
+            if (i === parts.length - 1) {
+                html += `<span>${this._esc(part)}</span>`;
+            } else {
+                html += `<a href="#" onclick="App._fetchTeraBoxPath('${this._esc(currentBuild.replace(/\\/g, '\\\\'))}'); return false;">${this._esc(part)}</a> / `;
+            }
+        });
+        
+        bc.innerHTML = html;
+    },
+
+    _renderTeraBoxList(items, currentPath) {
+        const list = document.getElementById('folder-list');
+        
+        if (!items || items.length === 0) {
+            list.innerHTML = '<div class="empty-state">Thư mục trống</div>';
+            return;
+        }
+
+        let html = '';
+        items.forEach(item => {
+            const icon = item.is_dir ? '📁' : '📄';
+            // Selection sets a global variable and highlights, double-click navigates
+            const action = item.is_dir ? `ondblclick="App._fetchTeraBoxPath('${this._esc(item.path.replace(/\\/g, '\\\\'))}')"` : '';
+            html += `
+                <div class="folder-item" onclick="App._selectTeraBoxItem(this, '${this._esc(item.path.replace(/\\/g, '\\\\'))}', '${this._esc(item.name)}')" ${action}>
+                    <span class="folder-item-icon">${icon}</span>
+                    <span class="folder-item-name">${this._esc(item.name)}</span>
+                </div>
+            `;
+        });
+        
+        list.innerHTML = html;
+        
+        // Override the select button logic while modal is open for TeraBox
+        const footerBtns = document.querySelector('.modal-footer');
+        // Save old html
+        if (!this._oldModalFooterHtml) this._oldModalFooterHtml = footerBtns.innerHTML;
+        
+        footerBtns.innerHTML = `
+            <button class="btn btn-ghost" onclick="App.closeTeraBoxBrowser()">Hủy</button>
+            <button class="btn btn-primary" onclick="App.confirmTeraBoxSelection()">✓ Chọn mục này</button>
+        `;
+    },
+
+    _selectTeraBoxItem(el, path, name) {
+        document.querySelectorAll('.folder-item').forEach(e => e.classList.remove('selected'));
+        el.classList.add('selected');
+        this.teraboxSelectedPath = path;
+        this.teraboxSelectedName = name;
+    },
+
+    closeTeraBoxBrowser() {
+        const modal = document.getElementById('folder-modal');
+        modal.style.display = 'none';
+        // restore footer
+        if (this._oldModalFooterHtml) {
+            document.querySelector('.modal-footer').innerHTML = this._oldModalFooterHtml;
+        }
+    },
+
+    confirmTeraBoxSelection() {
+        if (!this.teraboxSelectedPath) {
+            this.showToast('Vui lòng chọn 1 file hoặc thư mục', 'warn');
+            return;
+        }
+        
+        document.getElementById('terabox-src-name').textContent = this.teraboxSelectedName;
+        this.closeTeraBoxBrowser();
+    },
+
+    // ─── Destination Drive ──────────────────────────────────────────────────
+    async createTeraBoxDest() {
+        const nameInput = document.getElementById('terabox-new-folder-name');
+        const hint      = document.getElementById('terabox-create-dest-hint');
+        const name      = nameInput.value.trim();
+
+        if (!name) { this.showToast('Vui lòng nhập tên thư mục', 'warn'); return; }
+
+        nameInput.disabled = true;
+        hint.style.display = 'block';
+        hint.style.color   = 'var(--subtext)';
+        hint.innerHTML     = '⏳ Đang tạo thư mục trên Drive...';
+
+        try {
+            // Parent is root for now
+            const res  = await fetch('/api/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, parent_id: 'root' })
+            });
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error);
+
+            this.state.cloneDestId   = data.folder.id;
+            this.state.cloneDestName = data.folder.name;
+            document.getElementById('terabox-dest-name').textContent = data.folder.name;
+
+            hint.style.color = 'var(--success)';
+            hint.innerHTML   = `✅ Đã tạo & chọn thư mục: <strong>${this._esc(data.folder.name)}</strong>`;
+            nameInput.value  = '';
+            this.showToast('Đã tạo thư mục mới', 'success');
+
+            setTimeout(() => { hint.style.display = 'none'; }, 5000);
+        } catch (e) {
+            hint.style.color = 'var(--error)';
+            hint.innerHTML   = `❌ Lỗi: ${this._esc(e.message)}`;
+        } finally {
+            nameInput.disabled = false;
+        }
+    },
+
+    // ─── Clone Engine ───────────────────────────────────────────────────────
+    
+    async startTeraBoxClone() {
+        if (!this.state.authenticated) {
+            this.showToast('Vui lòng đăng nhập Google', 'error');
+            return;
+        }
+        if (!this.teraboxSelectedPath) {
+            this.showToast('Vui lòng chọn file/thư mục nguồn từ TeraBox', 'error');
+            return;
+        }
+        if (!this.state.cloneDestId) {
+            this.showToast('Vui lòng chọn thư mục đích', 'error');
+            return;
+        }
+
+        const btn    = document.getElementById('terabox-clone-btn');
+        const cancel = document.getElementById('terabox-cancel-btn');
+        const logBox = document.getElementById('terabox-log-box');
+        
+        btn.style.display = 'none';
+        cancel.style.display = 'block';
+        document.getElementById('terabox-log-area').style.display = 'block';
+        document.getElementById('terabox-stats-card').style.display = 'none';
+        logBox.innerHTML = '';
+        this._logTeraBox('🚀 Đang khởi tạo upload job...', 'var(--subtext)');
+        
+        this.state.cloneRunning = true;
+
+        try {
+            const res = await fetch('/api/terabox/clone', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    local_path: this.teraboxSelectedPath,
+                    dest_folder_id: this.state.cloneDestId
+                })
+            });
+            const data = await res.json();
+            if (!data.error) {
+                 this._connectTeraBoxStream(data.job_id);
+            } else {
+                 throw new Error(data.error);
+            }
+        } catch (e) {
+            this._logTeraBox(`❌ Không thể bắt đầu: ${e.message}`, 'var(--error)');
+            this._finishTeraBoxClone();
+        }
+    },
+
+    async cancelTeraBoxClone() {
+        if (!this.teraboxJobId) return;
+        
+        const cancelBtn = document.getElementById('terabox-cancel-btn');
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '⏳ Đang gửi lệnh hủy...';
+        
+        try {
+            await fetch(`/api/terabox/clone/${this.teraboxJobId}/cancel`, { method: 'POST' });
+        } catch (e) {
+            this.showToast('Không thể gửi lệnh hủy', 'error');
+        }
+    },
+
+    _connectTeraBoxStream(jobId) {
+        if (this.teraboxEventSource) {
+            this.teraboxEventSource.close();
+        }
+        
+        this.teraboxJobId = jobId;
+        const source = new EventSource(`/api/terabox/clone/${jobId}/stream`);
+        this.teraboxEventSource = source;
+        
+        source.onmessage = (e) => {
+            const ev = JSON.parse(e.data);
+            if (ev.type === 'ping') return;
+            
+            if (ev.type === 'log') {
+                this._logTeraBox(ev.msg);
+            } else if (ev.type === 'error') {
+                this._logTeraBox(`❌ Lỗi: ${ev.msg}`, 'var(--error)');
+                this._finishTeraBoxClone(true);
+            } else if (ev.type === 'done') {
+                this._logTeraBox('🎉 ĐÃ HOÀN TẤT UPLOAD!', 'var(--success)');
+                this._showTeraBoxStats(ev.stats);
+                this._finishTeraBoxClone();
+            }
+        };
+        
+        source.onerror = () => {
+            // Reconnection happens automatically in SSE
+        };
+    },
+
+    _finishTeraBoxClone(hasError = false) {
+        this.state.cloneRunning = false;
+        const btn    = document.getElementById('terabox-clone-btn');
+        const cancel = document.getElementById('terabox-cancel-btn');
+        
+        if (this.teraboxEventSource) {
+            this.teraboxEventSource.close();
+            this.teraboxEventSource = null;
+        }
+        this.teraboxJobId = null;
+        
+        btn.style.display = 'block';
+        cancel.style.display = 'none';
+        cancel.disabled = false;
+        cancel.textContent = '⛔ Hủy Upload';
+        
+        if (hasError) {
+             btn.textContent = '🔄 Thử lại';
+        } else {
+             btn.textContent = '🚀 Upload mục khác';
+        }
+    },
+
+    _logTeraBox(msg, color = 'var(--text)') {
+        const box = document.getElementById('terabox-log-box');
+        if (!box) return;
+        
+        const line = document.createElement('div');
+        line.style.color = color;
+        line.style.whiteSpace = 'pre-wrap';
+        line.style.paddingBottom = '4px';
+        line.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+        line.style.marginBottom = '4px';
+        
+        const time = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+        line.innerHTML = `<span style="color:var(--subtext);font-size:11px;margin-right:8px">[${time}]</span> ${this._esc(msg)}`;
+        
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+    },
+
+    _showTeraBoxStats(stats) {
+        if (!stats) return;
+        document.getElementById('terabox-stats-card').style.display = 'grid';
+        document.getElementById('terabox-stat-copied').textContent = stats.copied || 0;
+        document.getElementById('terabox-stat-skipped').textContent = stats.skipped || 0;
+        document.getElementById('terabox-stat-folders').textContent = stats.folders_created || 0;
+        document.getElementById('terabox-stat-errors').textContent = stats.errors || 0;
+    },
+    
+    // ─── Settings ──────────────────────────────────────────────────────────
+    async checkTeraBoxPath() {
+        const input = document.getElementById('terabox-path');
+        const msg = document.getElementById('terabox-path-msg');
+        
+        const path = input.value.trim();
+        msg.textContent = '⏳ Đang kiểm tra...';
+        msg.style.color = 'var(--subtext)';
+        
+        try {
+            const res = await fetch(`/api/terabox/browse?path=${encodeURIComponent(path)}`);
+            const data = await res.json();
+            
+            if (data.ok) {
+                 msg.textContent = '✅ Đã kết nối thành công!';
+                 msg.style.color = 'var(--success)';
+                 
+                 // Save the new path
+                 await fetch('/api/settings/terabox-path', {
+                     method: 'POST',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ path: path })
+                 });
+            } else {
+                 msg.textContent = `❌ Lỗi: ${data.error}`;
+                 msg.style.color = 'var(--error)';
+            }
+        } catch (e) {
+             msg.textContent = `❌ Không thể gọi server: ${e.message}`;
+             msg.style.color = 'var(--error)';
+        }
+    }
+});
 
 document.addEventListener('DOMContentLoaded', () => App.init());
