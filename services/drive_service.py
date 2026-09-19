@@ -70,11 +70,60 @@ class DriveService:
             return "My Drive"
         try:
             f = self.service.files().get(
-                fileId=folder_id, fields="name"
+                fileId=folder_id, fields="name", supportsAllDrives=True
             ).execute()
             return f.get("name", folder_id)
         except Exception:
             return folder_id
+
+    def get_item_info(self, item_id: str) -> dict:
+        """
+        Get metadata for a Drive item (file or folder).
+        Returns dict with keys: id, name, mimeType, is_folder, shortcutDetails (if any).
+        Resolves shortcuts automatically so clone operates on the real target.
+        """
+        if item_id == "root":
+            return {
+                "id": "root",
+                "name": "My Drive",
+                "mimeType": "application/vnd.google-apps.folder",
+                "is_folder": True,
+            }
+        f = self.service.files().get(
+            fileId=item_id,
+            fields="id, name, mimeType, trashed, shortcutDetails",
+            supportsAllDrives=True,
+        ).execute()
+
+        mime_type = f.get("mimeType", "")
+        # Resolve Google Drive shortcut
+        if mime_type == "application/vnd.google-apps.shortcut":
+            details = f.get("shortcutDetails", {})
+            target_id = details.get("targetId")
+            if target_id:
+                target_mime = details.get("targetMimeType")
+                if not target_mime:
+                    try:
+                        target_info = self.get_item_info(target_id)
+                        target_info["name"] = f.get("name", target_info.get("name", "Shortcut"))
+                        return target_info
+                    except Exception:
+                        pass
+                return {
+                    "id": target_id,
+                    "name": f.get("name", "Shortcut"),
+                    "mimeType": target_mime or "",
+                    "is_folder": (target_mime == "application/vnd.google-apps.folder"),
+                    "original_id": item_id,
+                }
+
+        is_folder = (mime_type == "application/vnd.google-apps.folder")
+        return {
+            "id": f.get("id", item_id),
+            "name": f.get("name", item_id),
+            "mimeType": mime_type,
+            "is_folder": is_folder,
+        }
 
     # ──────────────────────────────────────────────
     # Temp folder creation & sharing
@@ -247,6 +296,8 @@ class DriveService:
                 fields="nextPageToken, files(id, name, mimeType)",
                 pageSize=1000,
                 pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             ).execute()
             for f in resp.get("files", []):
                 is_folder = (f["mimeType"] == "application/vnd.google-apps.folder")
@@ -262,6 +313,7 @@ class DriveService:
         body: dict,
         log_callback=None,
         max_retries: int = 6,
+        cancel_event=None,
     ) -> dict:
         """
         Copy a file with exponential backoff on quota / rate-limit errors.
@@ -278,9 +330,11 @@ class DriveService:
 
         delay = 5  # initial wait in seconds
         for attempt in range(max_retries + 1):
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError('Tiến trình đã bị hủy bởi người dùng')
             try:
                 return self.service.files().copy(
-                    fileId=file_id, body=body
+                    fileId=file_id, body=body, supportsAllDrives=True
                 ).execute()
             except HttpError as exc:
                 status = getattr(exc, 'resp', None)
@@ -300,6 +354,8 @@ class DriveService:
                     })
                 # tick down every second so frontend can animate countdown
                 for remaining in range(wait, 0, -1):
+                    if cancel_event and cancel_event.is_set():
+                        raise RuntimeError('Tiến trình đã bị hủy bởi người dùng')
                     _time.sleep(1)
                     if log_callback:
                         log_callback({'type': 'quota_tick', 'remaining': remaining - 1})
@@ -313,6 +369,7 @@ class DriveService:
         source_folder_id: str,
         dest_parent_id: str,
         log_callback=None,
+        cancel_event=None,
         _stats: "dict | None" = None,
     ) -> dict:
         """
@@ -334,20 +391,34 @@ class DriveService:
             if log_callback:
                 log_callback(msg)
 
+        if cancel_event and cancel_event.is_set():
+            _log("⛔ Tiến trình đã bị hủy.")
+            return _stats
+
         # --- snapshot of what already exists at destination ---
         existing = self.get_existing_items(dest_parent_id)
 
         page_token = None
         while True:
+            if cancel_event and cancel_event.is_set():
+                _log("⛔ Tiến trình đã bị hủy.")
+                return _stats
+
             query = f"'{source_folder_id}' in parents and trashed=false"
             resp = self.service.files().list(
                 q=query,
                 fields="nextPageToken, files(id, name, mimeType)",
                 pageSize=1000,
                 pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             ).execute()
 
             for item in resp.get("files", []):
+                if cancel_event and cancel_event.is_set():
+                    _log("⛔ Tiến trình đã bị hủy.")
+                    return _stats
+
                 is_folder = (item["mimeType"] == "application/vnd.google-apps.folder")
                 key = (item["name"], is_folder)
 
@@ -362,7 +433,7 @@ class DriveService:
                             "parents": [dest_parent_id],
                         }
                         new_folder = self.service.files().create(
-                            body=meta, fields="id"
+                            body=meta, fields="id", supportsAllDrives=True
                         ).execute()
                         dest_folder_id = new_folder["id"]
                         _stats["folders_created"] += 1
@@ -370,7 +441,7 @@ class DriveService:
 
                     # recurse
                     self.clone_folder_recursive(
-                        item["id"], dest_folder_id, log_callback, _stats
+                        item["id"], dest_folder_id, log_callback, cancel_event, _stats
                     )
 
                 else:
@@ -384,7 +455,7 @@ class DriveService:
                         }
                         try:
                             self._copy_with_backoff(
-                                item["id"], file_meta, log_callback
+                                item["id"], file_meta, log_callback, cancel_event=cancel_event
                             )
                             _stats["copied"] += 1
                             _log(f"  📄 Đã COPY MỚI: {item['name']}")
@@ -396,5 +467,202 @@ class DriveService:
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
+
+        return _stats
+
+    def clone_file(
+        self,
+        source_file_id: str,
+        dest_parent_id: str,
+        file_name: Optional[str] = None,
+        log_callback=None,
+        cancel_event=None,
+    ) -> dict:
+        """
+        Clone a single file directly into dest_parent_id.
+        Skips if a file with the same name already exists at destination (resume-safe).
+        Uses exponential backoff on quota errors.
+        Returns stats dict { copied, skipped, folders_created, errors }.
+        """
+        import time as _time
+
+        stats = {"copied": 0, "skipped": 0, "folders_created": 0, "errors": 0}
+
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+
+        if cancel_event and cancel_event.is_set():
+            _log("⛔ Tiến trình đã bị hủy.")
+            return stats
+
+        if not file_name:
+            try:
+                info = self.get_item_info(source_file_id)
+                file_name = info.get("name", source_file_id)
+            except Exception:
+                file_name = source_file_id
+
+        # Check if already exists at destination
+        existing = self.get_existing_items(dest_parent_id)
+        key = (file_name, False)
+
+        if key in existing:
+            stats["skipped"] += 1
+            _log(f"  ⏩ Đã tồn tại tại đích, BỎ QUA: {file_name}")
+            return stats
+
+        file_meta = {
+            "name": file_name,
+            "parents": [dest_parent_id],
+        }
+        try:
+            self._copy_with_backoff(source_file_id, file_meta, log_callback, cancel_event=cancel_event)
+            stats["copied"] += 1
+            _log(f"  📄 Đã COPY MỚI: {file_name}")
+        except Exception as exc:
+            stats["errors"] += 1
+            _log(f"  ❌ Lỗi khi copy {file_name}: {exc}")
+
+        return stats
+
+
+
+    # ──────────────────────────────────────────────
+    # TeraBox / Local to Drive (Upload)
+    # ──────────────────────────────────────────────
+    
+    def upload_file_from_path(
+        self,
+        local_path: str,
+        dest_folder_id: str,
+        file_name: str,
+        log_callback=None,
+        cancel_event=None,
+    ) -> dict:
+        """
+        Uploads a local file (e.g. from TeraBox mount) to Google Drive.
+        Uses MediaFileUpload for chunked, resumable uploads.
+        """
+        import time as _time
+        from googleapiclient.http import MediaFileUpload
+        
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+                
+        if cancel_event and cancel_event.is_set():
+            _log(f"  ⛔ Đã hủy upload: {file_name}")
+            return {}
+
+        file_metadata = {
+            "name": file_name,
+            "parents": [dest_folder_id]
+        }
+
+        # Use 8MB chunk size (8 * 1024 * 1024)
+        media = MediaFileUpload(local_path, mimetype='application/octet-stream', resumable=True, chunksize=8388608)
+        
+        request = self.service.files().create(body=file_metadata, media_body=media, fields="id, name")
+        
+        response = None
+        while response is None:
+            if cancel_event and cancel_event.is_set():
+                _log(f"  ⛔ Đã hủy upload: {file_name}")
+                return {}
+                
+            try:
+                status, response = request.next_chunk()
+                if status and log_callback:
+                    # Could log progress here if needed, e.g., int(status.progress() * 100)
+                    pass
+            except Exception as exc:
+                # Basic retry logic for HTTP errors could be added here similar to _copy_with_backoff
+                raise
+
+        _log(f"  ✅ Đã UPLOAD MỚI: {file_name}")
+        return response
+
+    def clone_from_mount_recursive(
+        self,
+        local_dir: str,
+        dest_parent_id: str,
+        log_callback=None,
+        cancel_event=None,
+        _stats: "dict | None" = None,
+    ) -> dict:
+        """
+        Recursively upload from a local directory (e.g. TeraBox mount) to Drive.
+        Skips files/folders that already exist (resume-safe).
+        """
+        import os
+        import time as _time
+
+        if _stats is None:
+            _stats = {"copied": 0, "skipped": 0, "folders_created": 0, "errors": 0}
+
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+
+        if cancel_event and cancel_event.is_set():
+            _log("⛔ Tiến trình đã bị hủy.")
+            return _stats
+
+        # --- snapshot of what already exists at destination ---
+        existing = self.get_existing_items(dest_parent_id)
+
+        try:
+            items = os.listdir(local_dir)
+        except Exception as e:
+            _log(f"❌ Lỗi khi đọc thư mục {local_dir}: {e}")
+            _stats["errors"] += 1
+            return _stats
+
+        for item_name in items:
+            if cancel_event and cancel_event.is_set():
+                _log("⛔ Tiến trình đã bị hủy.")
+                break
+
+            item_path = os.path.join(local_dir, item_name)
+            is_folder = os.path.isdir(item_path)
+            key = (item_name, is_folder)
+
+            if is_folder:
+                if key in existing:
+                    dest_folder_id = existing[key]
+                    _log(f"📁 Thư mục đã có: {item_name} → Đang quét bên trong...")
+                else:
+                    meta = {
+                        "name": item_name,
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "parents": [dest_parent_id],
+                    }
+                    new_folder = self.service.files().create(
+                        body=meta, fields="id"
+                    ).execute()
+                    dest_folder_id = new_folder["id"]
+                    _stats["folders_created"] += 1
+                    _log(f"📁 Đã TẠO MỚI thư mục: {item_name}")
+
+                # recurse
+                self.clone_from_mount_recursive(
+                    item_path, dest_folder_id, log_callback, cancel_event, _stats
+                )
+
+            else:
+                if key in existing:
+                    _stats["skipped"] += 1
+                    _log(f"  ⏩ Đã tồn tại, BỎ QUA: {item_name}")
+                else:
+                    try:
+                        self.upload_file_from_path(
+                            item_path, dest_parent_id, item_name, log_callback, cancel_event
+                        )
+                        _stats["copied"] += 1
+                    except Exception as exc:
+                        _stats["errors"] += 1
+                        _log(f"  ❌ Lỗi khi upload {item_name}: {exc}")
+                    _time.sleep(0.1)   # light throttle
 
         return _stats

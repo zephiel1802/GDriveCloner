@@ -285,6 +285,13 @@ html, body {
 .btn-ghost { background: var(--card); color: var(--subtext); }
 .btn-ghost:not(:disabled):hover { background: var(--hover); color: var(--text); }
 
+.btn-danger { background: var(--error); color: #fff; }
+.btn-danger:not(:disabled):hover {
+    background: #e05252;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(255,107,107,0.3);
+}
+
 .btn-danger-outline { background: transparent; color: var(--error); border: 1px solid var(--error); }
 .btn-danger-outline:not(:disabled):hover { background: rgba(255,107,107,0.1); }
 
