@@ -667,3 +667,159 @@ def api_clone_status(job_id: str):
                     break
     return jsonify(resp)
 
+# ─── TeraBox Clone API ────────────────────────────────────────────────────────
+_terabox_clone_jobs: dict = {}
+_terabox_clone_jobs_lock = threading.Lock()
+
+@app.route('/api/terabox/browse', methods=['GET'])
+def api_terabox_browse():
+    """Browse the TeraBox virtual drive mount."""
+    path = request.args.get('path', '').strip()
+    if not path:
+        path = cfg.get("terabox_mount_path")
+        
+    if not path or not os.path.exists(path):
+        return jsonify({'error': f'Đường dẫn {path} không tồn tại hoặc chưa mount TeraBox.'}), 404
+        
+    try:
+        items = []
+        for name in os.listdir(path):
+            full_path = os.path.join(path, name)
+            is_dir = os.path.isdir(full_path)
+            items.append({
+                'name': name,
+                'path': full_path,
+                'is_dir': is_dir
+            })
+        # Sort folders first, then alphabetically
+        items.sort(key=lambda x: (not x['is_dir'], x['name'].lower()))
+        return jsonify({'ok': True, 'path': path, 'items': items})
+    except Exception as e:
+        return jsonify({'error': f'Lỗi khi đọc thư mục: {str(e)}'}), 500
+
+@app.route('/api/terabox/clone', methods=['POST'])
+def api_terabox_clone():
+    ds = _get_ds()
+    if not ds:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    data = request.get_json() or {}
+    local_path = (data.get('local_path') or '').strip()
+    dest_id    = (data.get('dest_folder_id') or 'root').strip()
+
+    if not local_path or not os.path.exists(local_path):
+        return jsonify({'error': 'local_path is required and must exist'}), 400
+
+    job_id    = _uuid.uuid4().hex
+    log_q: q_module.Queue = q_module.Queue()
+    cancel_event = threading.Event()
+
+    job = {'queue': log_q, 'status': 'running', 'log': [], 'cancel_event': cancel_event}
+    with _terabox_clone_jobs_lock:
+        _terabox_clone_jobs[job_id] = job
+
+    def _record(evt: dict):
+        with _terabox_clone_jobs_lock:
+            job['log'].append(evt)
+        log_q.put(evt)
+
+    def run():
+        def on_log(msg):
+            if isinstance(msg, str):
+                _record({'type': 'log', 'msg': msg})
+            elif isinstance(msg, dict):
+                _record(msg)
+
+        try:
+            _record({'type': 'log', 'msg': f'🔍 Nguồn TeraBox: {local_path}'})
+            _record({'type': 'log', 'msg': '🚀 Bắt đầu quét & upload...'})
+            
+            if os.path.isdir(local_path):
+                stats = ds.clone_from_mount_recursive(local_path, dest_id, on_log, cancel_event)
+            else:
+                stats = {"copied": 0, "skipped": 0, "folders_created": 0, "errors": 0}
+                file_name = os.path.basename(local_path)
+                try:
+                    ds.upload_file_from_path(local_path, dest_id, file_name, on_log, cancel_event)
+                    if not cancel_event.is_set():
+                        stats["copied"] += 1
+                except Exception as exc:
+                    stats["errors"] += 1
+                    on_log(f"❌ Lỗi khi upload {file_name}: {exc}")
+
+            with _terabox_clone_jobs_lock:
+                job['status'] = 'done' if not cancel_event.is_set() else 'error'
+            
+            if cancel_event.is_set():
+                 _record({'type': 'error', 'msg': 'Tiến trình đã bị hủy bởi người dùng.'})
+            else:
+                 _record({'type': 'done', 'stats': stats})
+                 
+        except Exception as exc:
+            with _terabox_clone_jobs_lock:
+                job['status'] = 'error'
+            _record({'type': 'error', 'msg': str(exc)})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def generate():
+        yield 'data: ' + json.dumps({'type': 'job_id', 'job_id': job_id}) + '\n\n'
+        
+        with _terabox_clone_jobs_lock:
+            j = _terabox_clone_jobs.get(job_id)
+        if not j:
+            yield 'data: {"type":"error","msg":"Job not found"}\n\n'
+            return
+            
+        with _terabox_clone_jobs_lock:
+            history = list(j['log'])
+        for evt in history:
+            yield 'data: ' + json.dumps(evt, ensure_ascii=False) + '\n\n'
+            
+        with _terabox_clone_jobs_lock:
+            done = j['status'] in ('done', 'error')
+        if done:
+            return
+            
+        lq: q_module.Queue = j['queue']
+        while True:
+            try:
+                item = lq.get(timeout=SSE_PING_INTERVAL)
+                yield 'data: ' + json.dumps(item, ensure_ascii=False) + '\n\n'
+                if item.get('type') in ('done', 'error'):
+                    break
+            except q_module.Empty:
+                yield 'data: {"type":"ping"}\n\n'
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+@app.route('/api/terabox/clone/<job_id>/cancel', methods=['POST'])
+def api_terabox_clone_cancel(job_id: str):
+    """Cancel a running TeraBox clone job."""
+    with _terabox_clone_jobs_lock:
+        job = _terabox_clone_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+        
+    job['cancel_event'].set()
+    return jsonify({'ok': True, 'msg': 'Đã gửi lệnh hủy.'})
+
+@app.route('/api/settings/terabox-path', methods=['GET', 'POST'])
+def api_terabox_path():
+    """Get or set the TeraBox mount path."""
+    if request.method == 'GET':
+        return jsonify({'path': cfg.get("terabox_mount_path")})
+    
+    data = request.get_json() or {}
+    path = data.get('path', '').strip()
+    if path:
+        cfg.set_value("terabox_mount_path", path)
+    return jsonify({'ok': True, 'path': path})
