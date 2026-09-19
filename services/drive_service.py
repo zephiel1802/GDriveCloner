@@ -666,3 +666,142 @@ class DriveService:
                     _time.sleep(0.1)   # light throttle
 
         return _stats
+
+    # ──────────────────────────────────────────────
+    # TeraBox / Local to Drive (Upload)
+    # ──────────────────────────────────────────────
+    
+    def upload_file_from_path(
+        self,
+        local_path: str,
+        dest_folder_id: str,
+        file_name: str,
+        log_callback=None,
+        cancel_event=None,
+    ) -> dict:
+        """
+        Uploads a local file (e.g. from TeraBox mount) to Google Drive.
+        Uses MediaFileUpload for chunked, resumable uploads.
+        """
+        import time as _time
+        from googleapiclient.http import MediaFileUpload
+        
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+                
+        if cancel_event and cancel_event.is_set():
+            _log(f"  ⛔ Đã hủy upload: {file_name}")
+            return {}
+
+        file_metadata = {
+            "name": file_name,
+            "parents": [dest_folder_id]
+        }
+
+        # Use 8MB chunk size (8 * 1024 * 1024)
+        media = MediaFileUpload(local_path, mimetype='application/octet-stream', resumable=True, chunksize=8388608)
+        
+        request = self.service.files().create(body=file_metadata, media_body=media, fields="id, name", supportsAllDrives=True)
+        
+        response = None
+        while response is None:
+            if cancel_event and cancel_event.is_set():
+                _log(f"  ⛔ Đã hủy upload: {file_name}")
+                return {}
+                
+            try:
+                status, response = request.next_chunk()
+                if status and log_callback:
+                    # Could log progress here if needed, e.g., int(status.progress() * 100)
+                    pass
+            except Exception as exc:
+                # Basic retry logic for HTTP errors could be added here similar to _copy_with_backoff
+                raise
+
+        _log(f"  ✅ Đã UPLOAD MỚI: {file_name}")
+        return response
+
+    def clone_from_mount_recursive(
+        self,
+        local_dir: str,
+        dest_parent_id: str,
+        log_callback=None,
+        cancel_event=None,
+        _stats: "dict | None" = None,
+    ) -> dict:
+        """
+        Recursively upload from a local directory (e.g. TeraBox mount) to Drive.
+        Skips files/folders that already exist (resume-safe).
+        """
+        import os
+        import time as _time
+
+        if _stats is None:
+            _stats = {"copied": 0, "skipped": 0, "folders_created": 0, "errors": 0}
+
+        def _log(msg):
+            if log_callback:
+                log_callback(msg)
+
+        if cancel_event and cancel_event.is_set():
+            _log("⛔ Tiến trình đã bị hủy.")
+            return _stats
+
+        # --- snapshot of what already exists at destination ---
+        existing = self.get_existing_items(dest_parent_id)
+
+        try:
+            items = os.listdir(local_dir)
+        except Exception as e:
+            _log(f"❌ Lỗi khi đọc thư mục {local_dir}: {e}")
+            _stats["errors"] += 1
+            return _stats
+
+        for item_name in items:
+            if cancel_event and cancel_event.is_set():
+                _log("⛔ Tiến trình đã bị hủy.")
+                break
+
+            item_path = os.path.join(local_dir, item_name)
+            is_folder = os.path.isdir(item_path)
+            key = (item_name, is_folder)
+
+            if is_folder:
+                if key in existing:
+                    dest_folder_id = existing[key]
+                    _log(f"📁 Thư mục đã có: {item_name} → Đang quét bên trong...")
+                else:
+                    meta = {
+                        "name": item_name,
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "parents": [dest_parent_id],
+                    }
+                    new_folder = self.service.files().create(
+                        body=meta, fields="id", supportsAllDrives=True
+                    ).execute()
+                    dest_folder_id = new_folder["id"]
+                    _stats["folders_created"] += 1
+                    _log(f"📁 Đã TẠO MỚI thư mục: {item_name}")
+
+                # recurse
+                self.clone_from_mount_recursive(
+                    item_path, dest_folder_id, log_callback, cancel_event, _stats
+                )
+
+            else:
+                if key in existing:
+                    _stats["skipped"] += 1
+                    _log(f"  ⏩ Đã tồn tại, BỎ QUA: {item_name}")
+                else:
+                    try:
+                        self.upload_file_from_path(
+                            item_path, dest_parent_id, item_name, log_callback, cancel_event
+                        )
+                        _stats["copied"] += 1
+                    except Exception as exc:
+                        _stats["errors"] += 1
+                        _log(f"  ❌ Lỗi khi upload {item_name}: {exc}")
+                    _time.sleep(0.1)   # light throttle
+
+        return _stats

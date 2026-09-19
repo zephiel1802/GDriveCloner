@@ -262,17 +262,17 @@
                         <div class="clone-stat">
                             <span class="clone-stat-icon">📄</span>
                             <span class="clone-stat-value" id="stat-copied">0</span>
-                            <span class="clone-stat-label">File đã copy</span>
+                            <span class="clone-stat-label">Đã copy</span>
                         </div>
                         <div class="clone-stat">
                             <span class="clone-stat-icon">⏩</span>
                             <span class="clone-stat-value" id="stat-skipped">0</span>
-                            <span class="clone-stat-label">Đã bỏ qua</span>
+                            <span class="clone-stat-label">Bỏ qua</span>
                         </div>
                         <div class="clone-stat">
                             <span class="clone-stat-icon">📁</span>
                             <span class="clone-stat-value" id="stat-folders">0</span>
-                            <span class="clone-stat-label">Thư mục tạo mới</span>
+                            <span class="clone-stat-label">Thư mục tạo</span>
                         </div>
                         <div class="clone-stat">
                             <span class="clone-stat-icon">❌</span>
@@ -281,6 +281,95 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- TeraBox Clone Tab -->
+        <div class="tab-panel hidden" data-tab="terabox" id="panel-terabox">
+            <div class="panel-scroll">
+                <div class="panel-header">
+                    <h1 class="panel-title">☁️ Clone từ TeraBox</h1>
+                    <p class="panel-subtitle">Upload trực tiếp file/thư mục từ ổ đĩa TeraBox (đã mount) lên Google Drive mà không cần lưu tạm.</p>
+                </div>
+
+                <!-- TeraBox Source -->
+                <div class="section-label">📂 Nguồn TeraBox (từ ổ đĩa ảo)</div>
+                <div class="card">
+                    <div class="card-row">
+                        <span class="folder-display" id="terabox-src-name">Chọn file hoặc thư mục...</span>
+                        <button class="btn btn-primary btn-sm" id="terabox-browse-btn" onclick="App.openTeraBoxBrowser()">Duyệt TeraBox</button>
+                    </div>
+                </div>
+
+                <!-- Destination folder -->
+                <div class="section-label">📂 Thư mục đích (trong Drive của bạn)</div>
+                <div class="card">
+                    <!-- Row 1: current selection + browse -->
+                    <div class="card-row">
+                        <span class="folder-display" id="terabox-dest-name">My Drive (root)</span>
+                        <button class="btn btn-primary btn-sm" id="terabox-dest-browse-btn"
+                                onclick="App.openCloneFolderBrowser(true)">Duyệt GDrive</button>
+                    </div>
+
+                    <!-- Divider -->
+                    <div class="clone-dest-divider">
+                        <span>hoặc</span>
+                    </div>
+
+                    <!-- Row 2: create new folder inline -->
+                    <div class="clone-new-folder-row">
+                        <input type="text" class="text-input clone-new-folder-input"
+                               id="terabox-new-folder-name"
+                               placeholder="Tên thư mục mới..."
+                               onkeydown="if(event.key==='Enter') App.createTeraBoxDest()">
+                        <button class="btn btn-success btn-sm" id="terabox-create-dest-btn"
+                                onclick="App.createTeraBoxDest()">
+                            ＋ Tạo &amp; chọn
+                        </button>
+                    </div>
+                    <p class="hint-text" id="terabox-create-dest-hint" style="margin-top:6px;display:none"></p>
+                </div>
+
+                <!-- Start button -->
+                <button class="btn btn-primary btn-block btn-large" id="terabox-clone-btn"
+                        onclick="App.startTeraBoxClone()">
+                    🚀 Bắt đầu Upload lên GDrive
+                </button>
+                <button class="btn btn-danger-outline btn-block btn-large" id="terabox-cancel-btn"
+                        onclick="App.cancelTeraBoxClone()" style="display:none; margin-top:12px;">
+                    ⛔ Hủy Upload
+                </button>
+
+                <!-- Log viewer (hidden until started) -->
+                <div id="terabox-log-area" style="display:none">
+                    <div class="section-label" style="margin-top:16px">📋 Log thời gian thực</div>
+                    <div class="clone-log-box" id="terabox-log-box"></div>
+
+                    <!-- Stats (hidden until done) -->
+                    <div class="clone-stats-card" id="terabox-stats-card" style="display:none">
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">📄</span>
+                            <span class="clone-stat-value" id="terabox-stat-copied">0</span>
+                            <span class="clone-stat-label">Đã upload</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">⏩</span>
+                            <span class="clone-stat-value" id="terabox-stat-skipped">0</span>
+                            <span class="clone-stat-label">Bỏ qua</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">📁</span>
+                            <span class="clone-stat-value" id="terabox-stat-folders">0</span>
+                            <span class="clone-stat-label">Thư mục tạo</span>
+                        </div>
+                        <div class="clone-stat">
+                            <span class="clone-stat-icon">❌</span>
+                            <span class="clone-stat-value" id="terabox-stat-errors">0</span>
+                            <span class="clone-stat-label">Lỗi</span>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
